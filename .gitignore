@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.vercel/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+tsconfig.tsbuildinfo
+.claude/
+bun.lock
+orbital-symphony.zip

@@ -1,0 +1,6 @@
+{
+  "name": "OrbitTracker",
+  "description": "Real-time 3D visualization of thousands of active satellites using CelesTrak TLE data.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
