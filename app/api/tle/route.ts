@@ -1,28 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { FALLBACK_TLE } from '@/lib/fallback-tle';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'edge';
 
 // ---------------------------------------------------------------------------
 // Catalog strategy: ALWAYS return a full sky.
 //
-//   base    = bundled snapshot (public/tle-snapshot.txt, ~25k objects,
-//             refreshed via scripts/fetch-tle-snapshot.mjs)
+//   base    = FALLBACK_TLE (built-in ~100-object mini-catalog, always present)
 //   overlay = whatever live sources are reachable right now, merged on top
 //             by NORAD id (fresher epochs win):
 //               - CelesTrak (one request; 403-blocked on some networks)
 //               - GitHub-hosted CelesTrak mirrors, refreshed daily by CI
-//                 (satvisorcom/satvisor-data, astrion-tech/celestrak-mirror)
-//               - tle.ivanstanojevic.me (paged; 500 req/window per-IP quota —
-//                 the sweep stops INSTANTLY on the first 429 and keeps the
-//                 pages it got)
-//               - SatNOGS DB (~1.7k community-tracked objects, one request)
+//               - tle.ivanstanojevic.me (paged, per-IP quota — stops on 429)
+//               - SatNOGS DB (~1.7k community-tracked objects)
 //
-// So a rate-limited mirror or a blocked CDN can only reduce FRESHNESS,
-// never the number of satellites.
+// Disk caching is intentionally absent: on Cloudflare Workers there is no
+// writable filesystem. Memory caching on globalThis survives within one
+// Worker isolate and covers the common case of repeated browser requests
+// within the cache window.
 // ---------------------------------------------------------------------------
 
 interface TleProgress {
@@ -36,7 +32,6 @@ interface TleGlobalState {
   progress: TleProgress;
   memoryCache: { text: string; timestamp: number; full: boolean } | null;
   inflight: Promise<{ text: string; full: boolean }> | null;
-  /** Do not call the paged mirror again before this time (429 backoff). */
   ivanBlockedUntil: number;
 }
 
@@ -57,19 +52,10 @@ function setTleProgress(p: Partial<TleProgress>): void {
   Object.assign(state().progress, p);
 }
 
-const CACHE_DURATION_MS = 3 * 60 * 60 * 1000; // 3 h — TLE epochs stay valid far longer
+const CACHE_DURATION_MS = 3 * 60 * 60 * 1000;
 const PARTIAL_CACHE_MS = 5 * 60 * 1000;
-// Resolved lazily: a module-scope path.join(os.tmpdir(), ...) gets statically
-// evaluated by Next's file tracer, which then tries to copy the temp dir into
-// the standalone build output.
-function diskCachePath(): string {
-  return path.join(os.tmpdir(), 'pimxsats-tle-active.txt');
-}
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
-// There are well over 12k tracked active objects; anything below this is a
-// partial catalog and every fallback tier keeps being tried.
 const FULL_CATALOG_MIN_SATS = 12000;
 
 // ---------------------------------------------------------------------------
@@ -78,7 +64,6 @@ const FULL_CATALOG_MIN_SATS = 12000;
 
 type TleMap = Map<string, { name: string; line1: string; line2: string }>;
 
-/** Parse TLE text into a NORAD-id-keyed map. */
 function tleTextToMap(text: string): TleMap {
   const map: TleMap = new Map();
   const lines = text.split('\n').map((l) => l.trim());
@@ -101,47 +86,15 @@ function tleMapToText(map: TleMap): string {
   return parts.join('\n') + '\n';
 }
 
-/** TLE epoch (YYDDD.DDDDDDDD from line 1) — for freshness comparison. */
 function tleEpoch(line1: string): number {
   return parseFloat(line1.substring(18, 32)) || 0;
 }
 
-/** Merge overlay onto base by NORAD id — the entry with the newer epoch wins. */
 function mergeInto(base: TleMap, overlay: TleMap): void {
   for (const [id, e] of overlay) {
     const cur = base.get(id);
     if (!cur || tleEpoch(e.line1) > tleEpoch(cur.line1)) base.set(id, e);
   }
-}
-
-// ---------------------------------------------------------------------------
-// Bundled snapshot (public/tle-snapshot.txt)
-// ---------------------------------------------------------------------------
-
-let snapshotCache: TleMap | null = null;
-
-function loadSnapshot(): TleMap {
-  // Only a REAL snapshot is cached. If the file was missing/unreadable once,
-  // caching the tiny built-in fallback here would permanently cap the catalog
-  // at ~100 objects for the lifetime of the server process — so the fallback
-  // is returned uncached and the file is retried on the next request.
-  if (snapshotCache) return snapshotCache;
-  for (const p of [
-    path.join(process.cwd(), 'public', 'tle-snapshot.txt'),
-    path.join(process.cwd(), '..', '..', 'public', 'tle-snapshot.txt'), // standalone output layout
-  ]) {
-    try {
-      const text = fs.readFileSync(p, 'utf8');
-      const map = tleTextToMap(text);
-      if (map.size > 1000) {
-        console.info(`TLE snapshot loaded: ${map.size} objects from ${p}`);
-        snapshotCache = map;
-        return map;
-      }
-    } catch { /* try next location */ }
-  }
-  console.info('TLE snapshot file not found — using built-in mini fallback (will retry)');
-  return tleTextToMap(FALLBACK_TLE);
 }
 
 // ---------------------------------------------------------------------------
@@ -160,8 +113,6 @@ async function tryFetchCelestrak(url: string): Promise<TleMap> {
   return map;
 }
 
-// GitHub-hosted mirrors, refreshed daily by their CI. raw.githubusercontent
-// is reachable from networks where CelesTrak itself is blocked.
 const GITHUB_MIRRORS = [
   { url: 'https://raw.githubusercontent.com/satvisorcom/satvisor-data/master/celestrak/tle/active.tle', min: 5000 },
   { url: 'https://raw.githubusercontent.com/astrion-tech/celestrak-mirror/main/tle/starlink.tle', min: 2000 },
@@ -217,7 +168,7 @@ async function tryFetchSatnogs(): Promise<TleMap> {
 }
 
 const IVAN_API = 'https://tle.ivanstanojevic.me/api/tle/';
-const IVAN_PAGE_SIZE = 100; // API max
+const IVAN_PAGE_SIZE = 100;
 const IVAN_CONCURRENCY = 4;
 const IVAN_429_BACKOFF_MS = 20 * 60 * 1000;
 
@@ -239,8 +190,6 @@ async function fetchIvanPage(page: number): Promise<IvanPage> {
   return (await res.json()) as IvanPage;
 }
 
-/** Paged sweep that respects the per-IP quota: the FIRST 429 stops all
- *  workers immediately and whatever was collected so far is returned. */
 async function fetchIvanCatalog(): Promise<TleMap> {
   const s = state();
   const map: TleMap = new Map();
@@ -282,7 +231,6 @@ async function fetchIvanCatalog(): Promise<TleMap> {
             setTleProgress({ done: map.size });
           } catch (err) {
             if (err instanceof QuotaError) { onQuota(); return; }
-            // one transient retry, then give up on this page
             try {
               if (quotaHit) return;
               await new Promise((r) => setTimeout(r, 800));
@@ -305,35 +253,14 @@ async function fetchIvanCatalog(): Promise<TleMap> {
 }
 
 // ---------------------------------------------------------------------------
-// Disk cache — survives dev-server restarts.
-// ---------------------------------------------------------------------------
-
-function readDiskCache(): { text: string; ageMs: number } | null {
-  try {
-    const stat = fs.statSync(diskCachePath());
-    const text = fs.readFileSync(diskCachePath(), 'utf8');
-    if (text.split('\n').length < FULL_CATALOG_MIN_SATS * 3) return null;
-    return { text, ageMs: Date.now() - stat.mtimeMs };
-  } catch {
-    return null;
-  }
-}
-
-function writeDiskCache(text: string): void {
-  try {
-    fs.writeFileSync(diskCachePath(), text, 'utf8');
-  } catch { /* read-only tmp is not fatal */ }
-}
-
-// ---------------------------------------------------------------------------
 
 async function loadCatalog(): Promise<{ text: string; full: boolean }> {
-  // Base: bundled snapshot — guarantees a full sky no matter what happens next.
-  const merged: TleMap = new Map(loadSnapshot());
+  // Base: built-in mini fallback — guarantees something even if all live
+  // sources fail. The live sweep typically replaces this entirely.
+  const merged: TleMap = tleTextToMap(FALLBACK_TLE);
   let freshCount = 0;
-  let sources = merged.size > 1000 ? 'snapshot' : 'bundled-mini';
+  let sources = 'fallback-mini';
 
-  // CelesTrak: freshest and cheapest when reachable.
   for (const url of [
     'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle',
     'https://celestrak.com/NORAD/elements/gp.php?GROUP=active&FORMAT=tle',
@@ -342,14 +269,13 @@ async function loadCatalog(): Promise<{ text: string; full: boolean }> {
       const m = await tryFetchCelestrak(url);
       mergeInto(merged, m);
       freshCount = m.size;
-      sources += '+celestrak';
+      sources = 'celestrak';
       break;
     } catch {
       console.info(`TLE source not accessible: ${url}`);
     }
   }
 
-  // GitHub-hosted mirrors: near-full catalog, parallel, fast, no quota.
   if (freshCount < FULL_CATALOG_MIN_SATS) {
     try {
       const m = await fetchGithubMirrors();
@@ -363,8 +289,6 @@ async function loadCatalog(): Promise<{ text: string; full: boolean }> {
     }
   }
 
-  // Paged mirror: only if everything above still left us short of a full sky
-  // (its per-IP quota is precious — don't spend it when mirrors delivered).
   if (freshCount < FULL_CATALOG_MIN_SATS) {
     try {
       const m = await fetchIvanCatalog();
@@ -378,7 +302,6 @@ async function loadCatalog(): Promise<{ text: string; full: boolean }> {
     }
   }
 
-  // SatNOGS: cheap freshness for the most-tracked objects.
   if (freshCount < FULL_CATALOG_MIN_SATS) {
     try {
       const m = await tryFetchSatnogs();
@@ -415,30 +338,19 @@ export async function GET(_request: NextRequest) {
     return respond(s.memoryCache.text, 'HIT');
   }
 
-  const disk = readDiskCache();
-  if (disk && disk.ageMs < CACHE_DURATION_MS) {
-    s.memoryCache = { text: disk.text, timestamp: now - disk.ageMs, full: true };
-    return respond(disk.text, 'DISK');
-  }
-
-  // Concurrent requests (retry loops, double-mounted effects) share one assembly.
   if (!s.inflight) {
-    s.inflight = loadCatalog().finally(() => {
-      s.inflight = null;
-    });
+    s.inflight = loadCatalog().finally(() => { s.inflight = null; });
   }
 
   try {
     const { text, full } = await s.inflight;
     s.memoryCache = { text, timestamp: Date.now(), full };
-    if (full) writeDiskCache(text);
     return respond(text, full ? 'MISS' : 'PARTIAL');
   } catch (err) {
     setTleProgress({ phase: 'error' });
     console.info(`Catalog assembly failed: ${err}`);
   }
 
-  if (disk) return respond(disk.text, 'STALE');
   if (s.memoryCache) return respond(s.memoryCache.text, 'STALE');
   return respond(FALLBACK_TLE, 'FALLBACK');
 }

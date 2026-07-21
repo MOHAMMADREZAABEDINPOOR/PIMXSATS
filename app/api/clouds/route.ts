@@ -1,30 +1,26 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'edge';
 
 // ---------------------------------------------------------------------------
-// Live global cloud cover.
+// Live global cloud cover — Edge-compatible (no fs/path/os).
 //
-// Source: clouds.matteason.co.uk — a free equirectangular cloud map rendered
-// from real EUMETSAT (Meteosat + GOES + Himawari) geostationary imagery,
-// republished roughly every 3 hours. The transparent-alpha PNG drops straight
-// onto the existing cloud sphere as a texture.
+// Source: clouds.matteason.co.uk — free equirectangular cloud map from real
+// EUMETSAT geostationary imagery, updated ~every 3 hours.
 //
-// The image is proxied (browser-cacheable, one origin) and cached in memory
-// and on disk so the upstream is hit at most once per REFRESH window per
-// server process. If the upstream is unreachable the bundled static cloud
-// texture is served instead — the globe never loses its cloud layer.
+// On Cloudflare Workers there is no writable filesystem, so only memory
+// caching on globalThis is used. If the upstream is unreachable the client
+// falls back to the bundled static cloud texture served directly from
+// /textures/earth_clouds.png (handled by the browser, not this route).
 // ---------------------------------------------------------------------------
 
 const LIVE_URL = 'https://clouds.matteason.co.uk/images/4096x2048/clouds-alpha.png';
-const REFRESH_MS = 3 * 60 * 60 * 1000; // upstream updates ~every 3 h
+const REFRESH_MS = 3 * 60 * 60 * 1000;
 
 interface CloudsGlobalState {
-  cache: { data: Buffer; timestamp: number } | null;
-  inflight: Promise<Buffer | null> | null;
+  cache: { data: ArrayBuffer; timestamp: number } | null;
+  inflight: Promise<ArrayBuffer | null> | null;
 }
 
 function state(): CloudsGlobalState {
@@ -33,35 +29,7 @@ function state(): CloudsGlobalState {
   return g.__cloudsState;
 }
 
-// Lazily resolved (see the TLE route for why this can't be module scope)
-function diskCachePath(): string {
-  return path.join(os.tmpdir(), 'pimxsats-clouds.png');
-}
-
-function readDiskCache(): { data: Buffer; ageMs: number } | null {
-  try {
-    const stat = fs.statSync(diskCachePath());
-    const data = fs.readFileSync(diskCachePath());
-    if (data.length < 10000) return null;
-    return { data, ageMs: Date.now() - stat.mtimeMs };
-  } catch {
-    return null;
-  }
-}
-
-function readBundledFallback(): Buffer | null {
-  for (const p of [
-    path.join(process.cwd(), 'public', 'textures', 'earth_clouds.png'),
-    path.join(process.cwd(), '..', '..', 'public', 'textures', 'earth_clouds.png'),
-  ]) {
-    try {
-      return fs.readFileSync(p);
-    } catch { /* try next location */ }
-  }
-  return null;
-}
-
-async function fetchLiveClouds(): Promise<Buffer | null> {
+async function fetchLiveClouds(): Promise<ArrayBuffer | null> {
   try {
     const res = await fetch(LIVE_URL, {
       cache: 'no-store',
@@ -69,8 +37,8 @@ async function fetchLiveClouds(): Promise<Buffer | null> {
       headers: { Accept: 'image/png,image/*;q=0.8' },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = Buffer.from(await res.arrayBuffer());
-    if (data.length < 10000) throw new Error('payload too small');
+    const data = await res.arrayBuffer();
+    if (data.byteLength < 10000) throw new Error('payload too small');
     return data;
   } catch (err) {
     console.info(`Live cloud map not accessible: ${err}`);
@@ -78,15 +46,14 @@ async function fetchLiveClouds(): Promise<Buffer | null> {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const s = state();
   const now = Date.now();
 
-  const respond = (data: Buffer, cacheHeader: string) =>
-    new NextResponse(new Uint8Array(data), {
+  const respond = (data: ArrayBuffer, cacheHeader: string) =>
+    new NextResponse(data, {
       headers: {
         'Content-Type': 'image/png',
-        // Browser may keep it for an hour; upstream only changes every ~3 h
         'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
         'X-Cloud-Source': cacheHeader,
       },
@@ -96,13 +63,6 @@ export async function GET() {
     return respond(s.cache.data, 'LIVE-CACHED');
   }
 
-  const disk = readDiskCache();
-  if (disk && disk.ageMs < REFRESH_MS) {
-    s.cache = { data: disk.data, timestamp: now - disk.ageMs };
-    return respond(disk.data, 'LIVE-DISK');
-  }
-
-  // Concurrent first requests share one upstream download
   if (!s.inflight) {
     s.inflight = fetchLiveClouds().finally(() => { s.inflight = null; });
   }
@@ -110,15 +70,12 @@ export async function GET() {
 
   if (live) {
     s.cache = { data: live, timestamp: Date.now() };
-    try { fs.writeFileSync(diskCachePath(), live); } catch { /* read-only tmp is not fatal */ }
     return respond(live, 'LIVE');
   }
 
-  // Upstream down: stale live data beats the static texture
-  if (disk) return respond(disk.data, 'STALE');
   if (s.cache) return respond(s.cache.data, 'STALE');
 
-  const bundled = readBundledFallback();
-  if (bundled) return respond(bundled, 'FALLBACK-STATIC');
-  return new NextResponse('cloud texture unavailable', { status: 503 });
+  // Upstream down and no memory cache: redirect the browser to the static
+  // bundled texture so the cloud layer is never completely missing.
+  return NextResponse.redirect(new URL('/textures/earth_clouds.png', request.url), 302);
 }
