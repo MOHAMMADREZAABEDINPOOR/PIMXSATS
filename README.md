@@ -62,7 +62,7 @@ PIMXSATS is a modern web application that renders the entire population of activ
 ## 🔐 Data & Privacy Model
 
 - **No sign-up, no cookies, no analytics.** The app is a pure client-side renderer.
-- TLE data is fetched through the built-in `/api/tle` proxy, which merges a bundled ~25k-object snapshot with whatever live sources are reachable (CelesTrak, daily-refreshed GitHub mirrors, SatNOGS) — fresher epochs win, so a blocked CDN only reduces freshness, never coverage.
+- The full ~16k-object TLE catalog is bundled with the site (`public/tle-snapshot.txt`) and refreshed from CelesTrak + daily-refreshed GitHub mirrors at every build — visitors never wait on (or connect to) third-party TLE APIs.
 - Your view settings and selections live only in the running page. Nothing about you is stored anywhere.
 
 ---
@@ -119,7 +119,7 @@ PIMXSATS is a modern web application that renders the entire population of activ
    node scripts/fetch-tle-snapshot.mjs
    ```
 
-No API keys are required — live TLE data is fetched (and cached) through the built-in `/api/tle` proxy, with a bundled full-sky snapshot as offline fallback.
+No API keys are required — the full-sky TLE snapshot is bundled into the site and refreshed automatically by the `prebuild` step on every build (`npm run snapshot` refreshes it manually).
 
 ---
 
@@ -138,7 +138,7 @@ This repository deploys to **[pimxsats.pages.dev](https://pimxsats.pages.dev/)**
 nodejs_compat
 ```
 
-**⚠️ Note:** The `/api/tle` route aggregates multiple upstream sources and caches the merged catalog; on Pages it runs as a serverless function, so the first cold request after a deploy can take longer while the catalog assembles.
+**⚠️ Note:** The satellite catalog is baked into the build (`prebuild` refreshes `public/tle-snapshot.txt`; if upstream sources are unreachable the last-known-good snapshot is kept, so the build never fails). A service worker precaches the catalog and all textures, so repeat visits start instantly and work offline.
 
 ---
 
@@ -231,7 +231,7 @@ For issues, questions, or suggestions, please open an issue on GitHub or contact
 
 ### 🔐 حریم خصوصی
 - **بدون ثبت‌نام، بدون کوکی، بدون آنالیتیکس.** این برنامه یک رندرکننده کاملاً سمت کلاینت است.
-- داده‌های TLE از طریق پراکسی داخلی `/api/tle` دریافت می‌شود که یک اسنپ‌شات همراه (~۲۵ هزار شیء) را با منابع زنده در دسترس (CelesTrak، میرورهای گیت‌هاب، SatNOGS) ادغام می‌کند.
+- کاتالوگ کامل TLE (~۱۶ هزار شیء) همراه خود سایت ارائه می‌شود (`public/tle-snapshot.txt`) و در هر بیلد به‌روزرسانی می‌گردد — بازدیدکننده هرگز منتظر دانلود داده از APIهای خارجی نمی‌ماند.
 - هیچ داده‌ای از شما در هیچ‌کجا ذخیره نمی‌شود.
 
 ### 🛠 پشته تکنولوژی
