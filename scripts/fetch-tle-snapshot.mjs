@@ -56,8 +56,19 @@ for (const url of SOURCES) {
   }
 }
 
+// Non-fatal by design: this runs at build time. If the live sources are
+// unreachable (or return too little), we KEEP the snapshot already committed
+// in the repo and exit 0 so the deploy still succeeds with the last-known-good
+// full catalog bundled into the site.
 if (merged.size < 5000) {
-  console.error(`FAILED: only ${merged.size} objects total — snapshot NOT updated`);
+  const existing = fs.existsSync(OUT) ? fs.statSync(OUT).size : 0;
+  if (existing > 0) {
+    console.warn(
+      `WARNING: only ${merged.size} objects fetched — keeping existing snapshot (${existing} bytes). Build continues.`
+    );
+    process.exit(0);
+  }
+  console.error(`FAILED: only ${merged.size} objects and no existing snapshot to fall back on.`);
   process.exit(1);
 }
 

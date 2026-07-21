@@ -16,11 +16,14 @@ const TrackerCanvas = dynamic(
   { ssr: false, loading: () => null }
 );
 
+// All bundled with the site — no runtime download. The live cloud layer
+// (/api/clouds) is intentionally NOT here: it upgrades in the background
+// inside Earth.tsx and must never gate startup.
 const EARTH_TEXTURES = [
   '/textures/earth_day.jpg',
   '/textures/earth_night.jpg',
   '/textures/earth_specular.jpg',
-  '/api/clouds', // live global cloud cover (real EUMETSAT-derived data)
+  '/textures/earth_clouds.png',
 ];
 
 /** Fetch-and-cache one image; resolves even on failure so a single slow CDN
@@ -42,6 +45,13 @@ interface LoadState {
   total: number;
 }
 
+// The full satellite catalog ships WITH the site as a static asset
+// (public/tle-snapshot.txt, refreshed at every build). It is served from the
+// site's own CDN and cached by the service worker, so a browser downloads it
+// at most once and never waits on slow third-party TLE APIs at runtime.
+const SNAPSHOT_URL = '/tle-snapshot.txt';
+const MIN_SNAPSHOT_SATS = 1000;
+
 export function SatelliteApp() {
   const [satellites, setSatellites] = useState<SatData[]>([]);
   const [selectedSat, setSelectedSat] = useState<SatData | null>(null);
@@ -50,14 +60,15 @@ export function SatelliteApp() {
   const [viewMode, setViewMode] = useState<'earth' | 'solar'>('earth');
   const [isFocused, setIsFocused] = useState(false);
 
-  // Startup: everything (TLE data + textures) is loaded and cached BEFORE the
-  // app is revealed. `ready` flips once, then the splash fades out.
+  // Startup: the bundled catalog + core textures are cached BEFORE the app is
+  // revealed. Because the catalog is a local static asset this is fast — no
+  // waiting on external downloads. `ready` flips once, then the splash fades.
   const [loadState, setLoadState] = useState<LoadState>({ phase: 'Initializing', done: 0, total: 1 });
   const [ready, setReady] = useState(false);
   const [splashGone, setSplashGone] = useState(false);
-  // Escape hatch shown only after repeated catalog download failures.
-  const [showOfflineOption, setShowOfflineOption] = useState(false);
-  const offlineRequestedRef = useRef(false);
+  // Shown only when the network is too weak to fetch even the bundled catalog.
+  const [connectionError, setConnectionError] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   // Fully independent settings per view — changing one never touches the other.
   const [earthSettings, setEarthSettings] = useState<EarthSettings>(DEFAULT_EARTH_SETTINGS);
@@ -85,81 +96,60 @@ export function SatelliteApp() {
     }
   }, [activeSettings.timeSpeed, activeSettings.enableMovement, activeSettings.realTime]);
 
-  // ----- Startup preload: data + textures, then reveal -----
+  // ----- Startup preload: bundled data + core textures, then reveal -----
   useEffect(() => {
     let cancelled = false;
-    const textureUrls = [...EARTH_TEXTURES, ...PLANETS.map((p) => p.textureUrl), SUN_TEXTURE_URL];
-    // The catalog download dominates startup time, so it owns most of the bar.
-    const CATALOG_WEIGHT = 7;
-    const totalSteps = CATALOG_WEIGHT + textureUrls.length;
-    // The first bump() (fired when the catalog completes) lands on CATALOG_WEIGHT.
-    let doneSteps = CATALOG_WEIGHT - 1;
+    // Only the Earth-view essentials gate startup; the solar-system textures
+    // are warmed in the background so the first paint isn't held up by them.
+    const criticalTextures = EARTH_TEXTURES;
+    const bgTextures = [...PLANETS.map((p) => p.textureUrl), SUN_TEXTURE_URL];
+    // Catalog parse gets the first chunk of the bar; the rest is textures.
+    const CATALOG_WEIGHT = 4;
+    const totalSteps = CATALOG_WEIGHT + criticalTextures.length;
+    let doneSteps = CATALOG_WEIGHT;
     const bump = (phase: string) => {
       doneSteps++;
       if (!cancelled) setLoadState({ phase, done: doneSteps, total: totalSteps });
     };
 
     async function boot() {
-      // 1. Full satellite catalog — the app does NOT start until it is loaded.
-      // The server aggregates ~25k objects (can take a minute on first run);
-      // live progress is polled from /api/tle/status. On failure the download
-      // is retried indefinitely; after two failed attempts an explicit
-      // "continue offline" escape hatch appears on the splash screen.
+      setConnectionError(false);
+      setLoadState({ phase: 'Loading satellite catalog', done: 0, total: totalSteps });
+
+      // 1. Full satellite catalog — bundled with the site as a static asset,
+      // so it comes off the CDN / service-worker cache in one quick request.
+      // No polling, no attempt loop, no external API on the critical path.
       let sats: SatData[] = [];
-      for (let attempt = 1; !cancelled; attempt++) {
-        setLoadState({
-          phase: attempt === 1
-            ? 'Downloading satellite catalog'
-            : `Downloading satellite catalog (attempt ${attempt})`,
-          done: 0,
-          total: totalSteps,
-        });
+      try {
+        const res = await fetch(SNAPSHOT_URL, { signal: AbortSignal.timeout(30000) });
+        if (res.ok) sats = parseTLE(await res.text());
+      } catch { /* handled by the connection-error branch below */ }
+      if (cancelled) return;
 
-        const poll = setInterval(async () => {
-          try {
-            const r = await fetch('/api/tle/status');
-            const p = await r.json();
-            if (!cancelled && p.phase === 'catalog' && p.total > 0) {
-              setLoadState({
-                phase: `Downloading satellite catalog — ${p.done.toLocaleString()} / ${p.total.toLocaleString()} objects`,
-                done: Math.min(CATALOG_WEIGHT * 0.99, (p.done / p.total) * CATALOG_WEIGHT),
-                total: totalSteps,
-              });
-            }
-          } catch { /* status endpoint is best-effort */ }
-        }, 700);
-
+      // If the bundled catalog couldn't be read at all, the network is down or
+      // too weak — show the styled connection-error screen and stop here. The
+      // built-in mini fallback is used only as a last resort so the globe is
+      // never completely empty once the user chooses to continue.
+      if (sats.length < MIN_SNAPSHOT_SATS) {
         try {
-          const res = await fetch('/api/tle?group=active', { signal: AbortSignal.timeout(600000) });
-          if (res.ok) sats = parseTLE(await res.text());
-        } catch { /* retried below */ }
-        clearInterval(poll);
-        if (cancelled) return;
-
-        // A real full sky is ~16k objects; below 8k it's a partial/degraded
-        // response — keep retrying (offline escape hatch appears after 2 tries).
-        if (sats.length >= 8000) break;
-        if (offlineRequestedRef.current) {
-          if (sats.length === 0) {
-            try { sats = parseTLE(FALLBACK_TLE); } catch { /* keep empty list */ }
-          }
-          break;
-        }
-        if (attempt >= 2) setShowOfflineOption(true);
-        // Responsive wait between attempts (reacts to the offline button)
-        for (let w = 0; w < 16 && !cancelled && !offlineRequestedRef.current; w++) {
-          await new Promise((r) => setTimeout(r, 250));
+          const fb = parseTLE(FALLBACK_TLE);
+          if (fb.length > sats.length) sats = fb;
+        } catch { /* keep whatever parsed */ }
+        if (sats.length === 0) {
+          setConnectionError(true);
+          return;
         }
       }
-      if (cancelled) return;
-      setShowOfflineOption(false);
-      setSatellites(sats);
-      bump('Caching textures');
 
-      // 2. All textures for both views + the 3D engine bundle, in parallel —
-      // by the time the splash clears, nothing is left to download.
+      setLoadState({ phase: 'Preparing textures', done: CATALOG_WEIGHT, total: totalSteps });
+      setSatellites(sats);
+
+      // 2. Core Earth textures + the 3D engine bundle, in parallel. Solar-view
+      // textures are warmed in the background (not awaited) so they're already
+      // cached by the time the user switches views, without delaying startup.
+      bgTextures.forEach((url) => { void preloadImage(url); });
       await Promise.all([
-        ...textureUrls.map((url) => preloadImage(url).then(() => bump('Caching textures'))),
+        ...criticalTextures.map((url) => preloadImage(url).then(() => bump('Caching textures'))),
         import('./TrackerCanvas').catch(() => undefined),
       ]);
 
@@ -173,36 +163,7 @@ export function SatelliteApp() {
 
     boot();
     return () => { cancelled = true; };
-  }, []);
-
-  // If startup could only get a partial dataset (degraded source tier or the
-  // bundled fallback), keep retrying the full catalog in the background and
-  // hot-swap it in the moment it arrives — the full fleet appears without a
-  // reload.
-  const FULL_CATALOG_MIN = 12000;
-  const satCountRef = useRef(0);
-  useEffect(() => { satCountRef.current = satellites.length; }, [satellites]);
-  useEffect(() => {
-    if (!ready) return;
-    let cancelled = false;
-    (async () => {
-      for (let attempt = 0; attempt < 12 && !cancelled; attempt++) {
-        if (satCountRef.current >= FULL_CATALOG_MIN) return; // full catalog already loaded
-        await new Promise((r) => setTimeout(r, attempt === 0 ? 8000 : 60000));
-        if (cancelled || satCountRef.current >= FULL_CATALOG_MIN) return;
-        try {
-          const res = await fetch('/api/tle?group=active', { signal: AbortSignal.timeout(600000) });
-          if (!res.ok) continue;
-          const sats = parseTLE(await res.text());
-          if (sats.length > satCountRef.current * 1.5 && !cancelled) {
-            setSatellites(sats);
-            if (sats.length >= FULL_CATALOG_MIN) return;
-          }
-        } catch { /* retry on the next pass */ }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [ready]);
+  }, [retryNonce]);
 
   // Continuous simulated-time integration (delta-time based).
   useEffect(() => {
@@ -334,8 +295,32 @@ export function SatelliteApp() {
 
   return (
     <>
-      {/* ---- Startup splash: shown until every resource is cached ---- */}
-      {!splashGone && (
+      {/* ---- Weak-connection error screen (styled, with retry) ---- */}
+      {connectionError && !ready && (
+        <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-[#010204] px-6 text-center">
+          <div className="text-5xl mb-6" aria-hidden>📡</div>
+          <div className="text-2xl font-bold font-mono tracking-[0.3em] mb-2 text-shimmer">
+            PIMX<span>SATS</span>
+          </div>
+          <div className="text-sm font-mono text-red-400/90 uppercase tracking-widest mb-4">
+            Connection problem
+          </div>
+          <p className="text-xs font-mono text-gray-400 max-w-sm leading-relaxed mb-8">
+            Your internet connection appears to be weak or offline, so the tracker
+            couldn&apos;t load. Check your connection and try again — once loaded,
+            PIMXSATS is cached on this device and starts instantly next time.
+          </p>
+          <button
+            onClick={() => setRetryNonce((n) => n + 1)}
+            className="text-xs font-mono text-cyan-300 border border-cyan-400/40 rounded px-6 py-2 hover:bg-cyan-400/10 transition-colors uppercase tracking-widest"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* ---- Startup splash: shown briefly while local assets are cached ---- */}
+      {!splashGone && !connectionError && (
         <div
           className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#010204] transition-opacity duration-500 ${
             ready ? 'opacity-0 pointer-events-none' : 'opacity-100'
@@ -357,14 +342,6 @@ export function SatelliteApp() {
           <div className="text-xs font-mono text-gray-400 px-6 text-center max-w-md" aria-live="polite">
             {loadState.phase}… {Math.round((loadState.done / loadState.total) * 100)}%
           </div>
-          {showOfflineOption && (
-            <button
-              onClick={() => { offlineRequestedRef.current = true; setShowOfflineOption(false); }}
-              className="mt-6 mx-6 text-center text-[11px] font-mono text-yellow-400/90 border border-yellow-400/40 rounded px-3 py-1.5 hover:bg-yellow-400/10 transition-colors"
-            >
-              Sources unreachable — continue with offline dataset (~100 satellites)
-            </button>
-          )}
         </div>
       )}
 

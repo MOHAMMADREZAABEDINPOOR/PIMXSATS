@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "snapshot": "node scripts/fetch-tle-snapshot.mjs",
+    "prebuild": "node scripts/fetch-tle-snapshot.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

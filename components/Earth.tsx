@@ -5,7 +5,7 @@
    that is the library's intended imperative API. */
 
 import { useLoader, useFrame, useThree } from '@react-three/fiber';
-import { useRef, useMemo, useEffect } from 'react';
+import { useRef, useMemo, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import * as satellite from 'satellite.js';
 import { getSunSceneDirection } from '@/lib/astronomy';
@@ -17,12 +17,20 @@ import { getSunSceneDirection } from '@/lib/astronomy';
 // Clouds are REAL: /api/clouds proxies a 4096×2048 global cloud map built
 // from live EUMETSAT/GOES/Himawari imagery (refreshed ~every 3 h), falling
 // back to the bundled static texture if the source is unreachable.
+// Bundled with the site — these three never touch the network at runtime
+// beyond the browser's own cache, so the globe paints immediately.
 export const EARTH_TEXTURE_URLS = [
   '/textures/earth_day.jpg',
   '/textures/earth_night.jpg',
   '/textures/earth_specular.jpg',
-  '/api/clouds',
 ];
+
+// The cloud layer is live data (refreshed a few times a day). It loads OFF the
+// critical path: the bundled static map shows instantly, then the live map
+// from /api/clouds silently replaces it when/if it arrives. A weak connection
+// never delays or breaks startup — the static clouds simply stay.
+const STATIC_CLOUDS_URL = '/textures/earth_clouds.png';
+const LIVE_CLOUDS_URL = '/api/clouds';
 
 interface EarthProps {
   simulatedTimeRef?: React.MutableRefObject<Date>;
@@ -42,20 +50,51 @@ export function Earth({
   const earthRef = useRef<THREE.Mesh>(null);
   const cloudsRef = useRef<THREE.Mesh>(null);
 
-  const textures = useLoader(THREE.TextureLoader, EARTH_TEXTURE_URLS);
+  // Surface maps + the bundled static cloud map: all local, load instantly.
+  const [colorMap, lightsMap, specularMap, staticCloudsMap] = useLoader(
+    THREE.TextureLoader,
+    [...EARTH_TEXTURE_URLS, STATIC_CLOUDS_URL]
+  );
+  const surfaceTextures = useMemo(
+    () => [colorMap, lightsMap, specularMap],
+    [colorMap, lightsMap, specularMap]
+  );
 
-  const [colorMap, lightsMap, specularMap, cloudsMap] = textures;
+  // Cloud map shown on the mesh: starts as the bundled static one, upgraded to
+  // the live map in the background without ever blocking the render.
+  const [cloudsMap, setCloudsMap] = useState<THREE.Texture>(staticCloudsMap);
+  useEffect(() => { setCloudsMap((c) => (c === staticCloudsMap ? staticCloudsMap : c)); }, [staticCloudsMap]);
 
   // Max anisotropic filtering: the single biggest sharpness win when the
   // globe is viewed at an angle or zoomed in (mipmap blur otherwise).
   const { gl } = useThree();
   useEffect(() => {
     const maxAniso = gl.capabilities.getMaxAnisotropy();
-    for (const t of textures) {
+    for (const t of [...surfaceTextures, staticCloudsMap]) {
       t.anisotropy = maxAniso;
       t.needsUpdate = true;
     }
-  }, [textures, gl]);
+  }, [surfaceTextures, staticCloudsMap, gl]);
+
+  // Background upgrade to the live cloud map. Fully non-blocking: on any
+  // failure or a weak connection the static clouds simply remain.
+  useEffect(() => {
+    let cancelled = false;
+    const maxAniso = gl.capabilities.getMaxAnisotropy();
+    new THREE.TextureLoader().load(
+      LIVE_CLOUDS_URL,
+      (tex) => {
+        if (cancelled) { tex.dispose(); return; }
+        tex.anisotropy = maxAniso;
+        tex.colorSpace = staticCloudsMap.colorSpace;
+        tex.needsUpdate = true;
+        setCloudsMap(tex);
+      },
+      undefined,
+      () => { /* keep the bundled static clouds */ }
+    );
+    return () => { cancelled = true; };
+  }, [gl, staticCloudsMap]);
 
   const uniforms = useMemo(() => ({
     uDayTexture: { value: colorMap },

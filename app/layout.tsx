@@ -1,5 +1,6 @@
 import type {Metadata, Viewport} from 'next';
 import './globals.css'; // Global styles
+import {ServiceWorkerRegistrar} from '@/components/ServiceWorkerRegistrar';
 
 export const metadata: Metadata = {
   title: 'PIMXSATS — Satellite & Solar System Tracker',
@@ -18,7 +19,10 @@ export const viewport: Viewport = {
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="en">
-      <body suppressHydrationWarning>{children}</body>
+      <body suppressHydrationWarning>
+        {children}
+        <ServiceWorkerRegistrar />
+      </body>
     </html>
   );
 }

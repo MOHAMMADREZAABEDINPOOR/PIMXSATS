@@ -69,7 +69,10 @@ export interface PlanetInfo {
   fact: string;
 }
 
-const TEX = 'https://raw.githubusercontent.com/sanderblue/solar-system-threejs/gh-pages/src/assets/textures';
+// Planet & Sun textures are bundled with the site (public/textures/planets/)
+// so nothing is fetched from a third-party CDN at runtime. Refresh them with
+// scripts/fetch-tle-snapshot.mjs' sibling assets if ever needed.
+const TEX = '/textures/planets';
 
 export const PLANETS: PlanetInfo[] = [
   {
