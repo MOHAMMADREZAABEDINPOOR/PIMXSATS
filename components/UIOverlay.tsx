@@ -293,11 +293,20 @@ function TimeAndScenePanel({
 
   return (
     <div className="space-y-3">
-      {/* Clock */}
+      {/* Clock.
+          Both rows WRAP and the variable-length parts are allowed to shrink. In
+          the drawer this card is only ~230 px wide inside its padding (86vw of a
+          320 px phone, less the drawer's and the card's own padding), and a
+          `justify-between gap-4` row with a 20-character timestamp on one side
+          needs more than that — so the card grew past the drawer and the drawer
+          scrolled sideways, which is what "not fully visible" was. A long IANA
+          zone name ("America/Argentina/Buenos_Aires") did the same thing on its
+          own. Wrapping costs one line on the narrowest screens; overflowing costs
+          the whole card. */}
       <div className="text-xs font-mono text-gray-400 space-y-1">
-        <div className="flex items-center justify-between gap-4">
-          <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> SIM TIME</span>
-          <span className="text-blue-400 font-bold tracking-wider" suppressHydrationWarning>
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5">
+          <span className="flex items-center gap-1 shrink-0"><Clock className="w-3 h-3" /> SIM TIME</span>
+          <span className="text-blue-400 font-bold tracking-wider tabular-nums" suppressHydrationWarning>
             {now
               ? now.toLocaleString('en-US', {
                   timeZone,
@@ -307,16 +316,16 @@ function TimeAndScenePanel({
               : 'Syncing...'}
           </span>
         </div>
-        <div className="flex items-center justify-between gap-4 text-[10px]">
-          <span className="flex items-center gap-1 text-gray-500" suppressHydrationWarning>
-            <MapPin className="w-3 h-3" />
-            {timeZone}
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[10px]">
+          <span className="flex items-center gap-1 text-gray-500 min-w-0" suppressHydrationWarning>
+            <MapPin className="w-3 h-3 shrink-0" />
+            <span className="truncate">{timeZone}</span>
             {locationSource === 'gps' && (
-              <span className="text-green-400 border border-green-500/40 rounded px-1 ml-1">GPS</span>
+              <span className="shrink-0 text-green-400 border border-green-500/40 rounded px-1 ml-1">GPS</span>
             )}
           </span>
           {timeTravelling && (
-            <span className="text-amber-400 border border-amber-500/40 rounded px-1">
+            <span className="shrink-0 text-amber-400 border border-amber-500/40 rounded px-1">
               {formatOffset(offsetMs)} vs now
             </span>
           )}
@@ -402,7 +411,7 @@ function TimeAndScenePanel({
           {isEarth ? 'Earth Scene' : 'Solar System Scene'}
         </span>
         {isEarth ? (
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
             <ToggleRow label="Clouds" checked={earthSettings.showClouds}
               onChange={(v) => onEarthSettingsChange({ ...earthSettings, showClouds: v })} />
             <ToggleRow label="Atmosphere" checked={earthSettings.showAtmosphere}
@@ -417,7 +426,7 @@ function TimeAndScenePanel({
               onChange={(v) => onEarthSettingsChange({ ...earthSettings, enableMovement: v })} />
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
             <ToggleRow label="Orbit Lines" checked={solarSettings.showOrbits}
               onChange={(v) => onSolarSettingsChange({ ...solarSettings, showOrbits: v })} />
             <ToggleRow label="Moons" checked={solarSettings.showMoons}
@@ -1973,28 +1982,24 @@ export function UIOverlay({
           <div className="flex justify-center sm:hidden">
             <DonateButton />
           </div>
-          {/* The time card and the alerts/fleet card, forced to the SAME height.
+          {/* The time card and the alerts/fleet card, each at its own content
+              height.
 
-              `grid-rows-2` is `repeat(2, minmax(0,1fr))`, and in a container whose
-              own height is indefinite — this one, inside a scroller — equal `fr`
-              rows resolve to the tallest row's content height. So both cards come
-              out at exactly the height of whichever has more in it, with the
-              shorter one carrying the difference as empty space at the bottom.
-              Nothing is capped and nothing is clipped, which is what lets them be
-              equal here without introducing a second scroll region inside a
-              drawer that is already scrolling — nested touch scrolling being far
-              worse than a card with some room to spare.
+              These two used to be a `grid grid-rows-2`, forcing both to the
+              height of the taller one. That was the right shape for the desktop
+              columns, where the two cards sit side by side and the eye compares
+              them. It is the wrong shape HERE: nothing is beside anything in a
+              one-column drawer, so the only thing equal heights bought was a
+              block of dead space inside whichever card was shorter — which is
+              exactly the "this card is far too tall" report, since the time panel
+              is the shorter one whenever the alerts list has anything in it.
 
-              Same two cards as the desktop left column plus the time panel, in the
-              same order as there. */}
-          <div className={viewMode === 'earth' ? 'grid grid-rows-2 gap-3 sm:gap-4' : 'space-y-3 sm:space-y-4'}>
-            <div className="bg-white/5 rounded-xl p-3 border border-white/5">{timePanel}</div>
-            {/* No equal-height grid in the solar view: this card is a short
-                space-weather readout, and pairing it with the time panel left
-                either a very tall empty card or a very tall empty gap in a
-                drawer that scrolls. The pairing exists for the Earth view's
-                alerts/fleet card, which is what has to match the time card. */}
-            <div className="bg-white/5 rounded-xl p-3 border border-white/5">{topLeftPanel}</div>
+              `min-w-0` on both: they are flex items in the drawer's column, and
+              without it a card whose content has an intrinsic minimum width can
+              push past the drawer instead of being the thing that adapts. */}
+          <div className="space-y-3 sm:space-y-4">
+            <div className="bg-white/5 rounded-xl p-3 border border-white/5 min-w-0">{timePanel}</div>
+            <div className="bg-white/5 rounded-xl p-3 border border-white/5 min-w-0">{topLeftPanel}</div>
           </div>
           {/* The filters / spacecraft card, sized to the detail sheet exactly.
               `min(430px,62dvh)` is the mobile sheet's height in InfoCard — the two
