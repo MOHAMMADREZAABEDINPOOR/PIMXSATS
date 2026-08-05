@@ -15,6 +15,7 @@ interface SatellitesProps {
   onClick: (sat: SatData) => void;
   selectedSat: SatData | null;
   simulatedTimeRef: React.MutableRefObject<Date>;
+  showConstellations?: boolean;
 }
 
 const SAT_SIZE = 0.0016;
@@ -35,20 +36,56 @@ const PICK_ANGULAR_COARSE = 0.014;
 const isCoarsePointer = () =>
   typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
+// ---------------------------------------------------------------------------
+// Tap vs. drag
+//
+// Selection used to fire on POINTER DOWN, which made the globe almost unusable
+// on a phone: the same gesture that spins the Earth starts by putting a finger
+// somewhere on it, and with 10,000 dots on screen and a 25 px tap circle,
+// "somewhere" is usually on a satellite. Every rotation opened a detail card.
+//
+// So a press is now only a selection if it ends like a tap — released within
+// TAP_SLOP_PX of where it started, inside TAP_MAX_MS, with no second finger
+// involved. Anything else is a camera gesture and the dot under it is ignored.
+//
+// The arbitration is watched on `window`, not on the mesh: satellites move, and
+// a finger held still for 400 ms is no longer over the dot it pressed. Judging
+// the release by the DOM event that happens to land on the instanced mesh would
+// drop exactly the taps that took a moment.
+// ---------------------------------------------------------------------------
+const TAP_MAX_MS = 450;
+const TAP_SLOP_PX = 6;
+const TAP_SLOP_PX_COARSE = 14;
+
+interface TapCandidate {
+  pointerId: number;
+  index: number;
+  x: number;
+  y: number;
+  startedAt: number;
+  slop: number;
+}
+
 const tempColor = new THREE.Color();
 const scratchPos: ScenePos = { x: 0, y: 0, z: 0 };
 
-export function Satellites({ satellites, onClick, selectedSat, simulatedTimeRef }: SatellitesProps) {
+export function Satellites({ satellites, onClick, selectedSat, simulatedTimeRef, showConstellations = false }: SatellitesProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
+  const lineRef = useRef<THREE.LineSegments>(null);
   const cursorRef = useRef(0);
   const lastHoverRef = useRef(0);
   const selectedIndexRef = useRef(-1);
+  const tapRef = useRef<TapCandidate | null>(null);
   const [hoveredSat, setHoveredSat] = useState<{ sat: SatData; index: number } | null>(null);
 
   // Billboarded perfect-circle sprite (same radius/colors as the old spheres)
   const dotGeometry = useMemo(() => createCircleSpriteGeometry(SAT_SIZE), []);
   const dotMaterial = useMemo(() => createCircleSpriteMaterial(), []);
   useEffect(() => () => { dotGeometry.dispose(); dotMaterial.dispose(); }, [dotGeometry, dotMaterial]);
+
+  // Pre-allocated array for drawing constellations to avoid GC thrashing
+  const maxLines = 1000;
+  const linePositions = useMemo(() => new Float32Array(maxLines * 2 * 3), []);
 
   // World-space position of every instance, refreshed by the propagation
   // loop. NaN marks "not visible" (not yet launched / propagation failed).
@@ -156,6 +193,101 @@ export function Satellites({ satellites, onClick, selectedSat, simulatedTimeRef 
       if (i > 0) attr.addUpdateRange(0, i * 16);
     }
     attr.needsUpdate = true;
+
+    // ----- Constellations connector logic -----
+    if (showConstellations && lineRef.current) {
+      // Spatial grid hashing to quickly find close nodes of the same category (O(N) search)
+      const grid = new Map<string, number[]>();
+      const cellSize = 0.16; // approx 1000km link distance
+      const cellSizeSq = cellSize * cellSize;
+
+      for (let idx = 0; idx < total; idx++) {
+        const x = posCache[idx * 3];
+        if (Number.isNaN(x)) continue;
+        const y = posCache[idx * 3 + 1];
+        const z = posCache[idx * 3 + 2];
+        const cx = Math.floor(x / cellSize);
+        const cy = Math.floor(y / cellSize);
+        const cz = Math.floor(z / cellSize);
+        const key = `${cx},${cy},${cz}`;
+        let list = grid.get(key);
+        if (!list) {
+          list = [];
+          grid.set(key, list);
+        }
+        list.push(idx);
+      }
+
+      let lineCount = 0;
+      const positionsAttr = lineRef.current.geometry.attributes.position as THREE.BufferAttribute;
+      const posArr = positionsAttr.array as Float32Array;
+
+      // Scan each grid cell and its 27 neighbors for connecting pairs of same category
+      for (const [key, cellIndices] of grid.entries()) {
+        if (lineCount >= maxLines) break;
+        const [cx, cy, cz] = key.split(',').map(Number);
+
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dz = -1; dz <= 1; dz++) {
+              if (lineCount >= maxLines) break;
+              const nKey = `${cx + dx},${cy + dy},${cz + dz}`;
+              const neighborIndices = grid.get(nKey);
+              if (!neighborIndices) continue;
+
+              for (const i of cellIndices) {
+                if (lineCount >= maxLines) break;
+                const ix = posCache[i * 3];
+                const iy = posCache[i * 3 + 1];
+                const iz = posCache[i * 3 + 2];
+                const iCat = satellites[i].category;
+
+                // Ignore debris / rocket bodies, only connect active satellites / constellations
+                if (iCat === 'Debris' || iCat === 'Rocket Bodies') continue;
+
+                for (const j of neighborIndices) {
+                  if (i >= j) continue; // avoid duplicates
+                  if (lineCount >= maxLines) break;
+
+                  if (satellites[j].category !== iCat) continue;
+
+                  const jx = posCache[j * 3];
+                  const jy = posCache[j * 3 + 1];
+                  const jz = posCache[j * 3 + 2];
+
+                  const dx_val = jx - ix;
+                  const dy_val = jy - iy;
+                  const dz_val = jz - iz;
+                  const distSq = dx_val * dx_val + dy_val * dy_val + dz_val * dz_val;
+
+                  if (distSq < cellSizeSq) {
+                    const offset = lineCount * 6;
+                    posArr[offset] = ix;
+                    posArr[offset + 1] = iy;
+                    posArr[offset + 2] = iz;
+                    posArr[offset + 3] = jx;
+                    posArr[offset + 4] = jy;
+                    posArr[offset + 5] = jz;
+                    lineCount++;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Hide unused segments in the buffer
+      for (let i = lineCount; i < maxLines; i++) {
+        const offset = i * 6;
+        posArr[offset] = 0; posArr[offset + 1] = 0; posArr[offset + 2] = 0;
+        posArr[offset + 3] = 0; posArr[offset + 4] = 0; posArr[offset + 5] = 0;
+      }
+      positionsAttr.needsUpdate = true;
+      lineRef.current.visible = true;
+    } else if (lineRef.current) {
+      lineRef.current.visible = false;
+    }
   });
 
   // Analytic picking: nearest satellite whose cached position lies within a
@@ -218,14 +350,79 @@ export function Satellites({ satellites, onClick, selectedSat, simulatedTimeRef 
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
-    if (e.instanceId !== undefined) {
-      onClick(satellites[e.instanceId]);
-      setHoveredSat(null);
-    }
+    if (e.instanceId === undefined) return;
+    // Arm a candidate; the window listeners below decide whether it was a tap.
+    tapRef.current = {
+      pointerId: e.pointerId,
+      index: e.instanceId,
+      x: e.clientX,
+      y: e.clientY,
+      startedAt: performance.now(),
+      slop: e.pointerType === 'touch' || e.pointerType === 'pen'
+        ? TAP_SLOP_PX_COARSE
+        : TAP_SLOP_PX,
+    };
   };
+
+  // Tap arbitration. Installed once and driven off refs so a catalog change
+  // (filters, era scrubbing) never re-binds four window listeners.
+  const onClickRef = useRef(onClick);
+  onClickRef.current = onClick;
+  const satellitesRef = useRef(satellites);
+  satellitesRef.current = satellites;
+
+  useEffect(() => {
+    const drifted = (t: TapCandidate, e: PointerEvent) =>
+      Math.hypot(e.clientX - t.x, e.clientY - t.y) > t.slop;
+
+    const onMove = (e: PointerEvent) => {
+      const t = tapRef.current;
+      if (!t || t.pointerId !== e.pointerId) return;
+      // Past the slop it is a camera drag, permanently — re-entering the circle
+      // later must not resurrect the selection.
+      if (drifted(t, e)) tapRef.current = null;
+    };
+
+    const onUp = (e: PointerEvent) => {
+      const t = tapRef.current;
+      if (!t || t.pointerId !== e.pointerId) return;
+      tapRef.current = null;
+      if (performance.now() - t.startedAt > TAP_MAX_MS) return;
+      if (drifted(t, e)) return;
+      const sat = satellitesRef.current[t.index];
+      if (!sat) return;
+      onClickRef.current(sat);
+      setHoveredSat(null);
+    };
+
+    // A second finger means pinch-zoom. Nothing that starts as a pinch may end
+    // as a selection, even if the first finger never moved.
+    const onExtraDown = (e: PointerEvent) => {
+      const t = tapRef.current;
+      if (t && t.pointerId !== e.pointerId) tapRef.current = null;
+    };
+
+    const onCancel = () => { tapRef.current = null; };
+
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp, { passive: true });
+    window.addEventListener('pointerdown', onExtraDown, { passive: true });
+    window.addEventListener('pointercancel', onCancel, { passive: true });
+    window.addEventListener('blur', onCancel);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointerdown', onExtraDown);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('blur', onCancel);
+    };
+  }, []);
 
   const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
+    // Hover is a mouse affordance. On touch it fired on the way through a drag
+    // and left a tooltip stranded over the globe.
+    if (e.pointerType === 'touch') return;
     const nowMs = performance.now();
     if (nowMs - lastHoverRef.current < HOVER_THROTTLE_MS) return;
     lastHoverRef.current = nowMs;
@@ -253,6 +450,22 @@ export function Satellites({ satellites, onClick, selectedSat, simulatedTimeRef 
         onPointerOut={handlePointerOut}
       />
 
+      <lineSegments ref={lineRef} frustumCulled={false}>
+        <bufferGeometry>
+          <bufferAttribute
+            attach="attributes-position"
+            args={[linePositions, 3]}
+          />
+        </bufferGeometry>
+        <lineBasicMaterial
+          color="#00e1ff"
+          transparent
+          opacity={0.3}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </lineSegments>
+
       {hoveredSat && <SatelliteTooltip sat={hoveredSat.sat} index={hoveredSat.index} posCache={posCache} />}
     </>
   );
@@ -278,7 +491,7 @@ function SatelliteTooltip({ sat, index, posCache }: { sat: SatData; index: numbe
       <Html center style={{ pointerEvents: 'none', userSelect: 'none' }} zIndexRange={[100, 0]}>
         <div
           style={{ transform: 'translateY(calc(-50% - 12px))' }}
-          className="bg-black/90 backdrop-blur-sm px-2.5 py-1 rounded-md border border-white/20 shadow-lg animate-fade-in"
+          className="scene-label bg-black/90 backdrop-blur-sm px-2.5 py-1 rounded-md border border-white/20 shadow-lg animate-fade-in"
         >
           <div className="text-xs font-mono font-semibold whitespace-nowrap" style={{ color: sat.color }}>
             {sat.name}

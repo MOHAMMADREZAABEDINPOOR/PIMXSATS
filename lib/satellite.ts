@@ -274,6 +274,9 @@ function isSaneState(pos: satellite.EciVec3<number>, vel?: satellite.EciVec3<num
 // ---------------------------------------------------------------------------
 
 export interface ScenePos { x: number; y: number; z: number; }
+/** A position plus the velocity of the anchor it was extrapolated from,
+ *  in scene units and scene units per simulated second. */
+export interface SceneState extends ScenePos { vx: number; vy: number; vz: number; }
 
 export const PROP_FAILED = 0;
 export const PROP_CACHED = 1;
@@ -282,36 +285,52 @@ export type PropResult = typeof PROP_FAILED | typeof PROP_CACHED | typeof PROP_F
 
 const SCENE_SCALE = 1 / 6371;
 const MU_EARTH = 398600.4418; // km^3/s^2
-// Max drift allowed from linear extrapolation before re-anchoring (~half a
+// Gravitational parameter expressed in SCENE units (scene^3/s^2), so the
+// two-body acceleration can be evaluated directly on scene-space vectors:
+//   a = -MU_SCENE * p / |p|^3
+const MU_SCENE = MU_EARTH * SCENE_SCALE * SCENE_SCALE * SCENE_SCALE;
+// Max drift allowed from the extrapolation before re-anchoring (~half a
 // rendered dot diameter at scene scale).
 const EXTRAP_TOL_KM = 5;
 // Wall-clock backoff after a failed propagation: decayed/garbage TLEs far
 // from their epoch would otherwise re-run a doomed (and possibly multi-ms)
 // propagation every single frame.
 const FAIL_BACKOFF_MS = 1500;
+// Upper bound on the extrapolation window. The truncation error alone would
+// allow ~30 min, but the anchor is a pure two-body state: J2 (~1.2e-5 km/s^2
+// for LEO) is not modelled, and the drawn orbit path only re-tracks nodal
+// precession when the anchor refreshes. 90 s keeps that error at ~50 m while
+// still cutting full propagations to a fraction of the old rate.
+const MAX_EXTRAP_WINDOW_MS = 90000;
 
 interface SceneCache {
   has: boolean;      // anchor holds a valid state
   ms: number;        // simulated time of the anchor
   x: number; y: number; z: number;    // scene units
   vx: number; vy: number; vz: number; // scene units per simulated second
+  ax: number; ay: number; az: number; // scene units per simulated second^2
   window: number;    // ± ms of simulated time the anchor stays accurate
   failUntil: number; // wall-clock ms: skip full attempts until then
+  anchorId: number;  // bumped on every re-anchor (0 = never anchored)
 }
 
 type CachedSatRec = satellite.SatRec & { __sceneCache?: SceneCache };
 
-/** How long linear extrapolation stays within EXTRAP_TOL_KM. The error is
- *  bounded by the gravitational acceleration at perigee: t ≈ √(2·tol/a) —
- *  about 34 s of simulated time for LEO, ~3.5 min for GEO. */
+let nextAnchorId = 1;
+
+/** How long the second-order extrapolation stays within EXTRAP_TOL_KM.
+ *  Position error is now dominated by the neglected JERK term,
+ *  |j| ≈ 3·µ·v/r⁴, giving t ≈ ∛(6·tol/|j|) — long enough that the practical
+ *  limit is MAX_EXTRAP_WINDOW_MS rather than truncation error. */
 function extrapWindowMs(satrec: satellite.SatRec): number {
   const n = satrec.no / 60; // rad/min → rad/s
   if (!(n > 0)) return 2000;
   const sma = Math.cbrt(MU_EARTH / (n * n)); // semi-major axis, km
   const perigee = Math.max(6500, sma * (1 - (satrec.ecco || 0)));
-  const accel = MU_EARTH / (perigee * perigee); // km/s^2
-  const tSec = Math.sqrt((2 * EXTRAP_TOL_KM) / accel);
-  return Math.min(600, Math.max(2, tSec)) * 1000;
+  const vPerigee = Math.sqrt(MU_EARTH * (2 / perigee - 1 / sma));
+  const jerk = (3 * MU_EARTH * vPerigee) / (perigee * perigee * perigee * perigee);
+  const tSec = Math.cbrt((6 * EXTRAP_TOL_KM) / jerk);
+  return Math.min(MAX_EXTRAP_WINDOW_MS / 1000, Math.max(2, tSec)) * 1000;
 }
 
 /**
@@ -339,7 +358,8 @@ export function getScenePositionCached(
   if (c === undefined) {
     c = rec.__sceneCache = {
       has: false, ms: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
-      window: extrapWindowMs(satrec), failUntil: 0,
+      ax: 0, ay: 0, az: 0,
+      window: extrapWindowMs(satrec), failUntil: 0, anchorId: 0,
     };
   }
 
@@ -347,10 +367,14 @@ export function getScenePositionCached(
     const dt = ms - c.ms;
     const age = Math.abs(dt);
     if (age <= c.window && age <= maxAgeMs) {
+      // Second-order (curved) extrapolation: position follows the true orbital
+      // arc, not the tangent line, so the moving dot stays ON the drawn orbit
+      // ellipse for the whole window instead of drifting off it.
       const s = dt / 1000;
-      out.x = c.x + c.vx * s;
-      out.y = c.y + c.vy * s;
-      out.z = c.z + c.vz * s;
+      const half = 0.5 * s * s;
+      out.x = c.x + c.vx * s + c.ax * half;
+      out.y = c.y + c.vy * s + c.ay * half;
+      out.z = c.z + c.vz * s + c.az * half;
       return PROP_CACHED;
     }
   }
@@ -387,10 +411,37 @@ export function getScenePositionCached(
   c.vx = vel.x * SCENE_SCALE;
   c.vy = vel.z * SCENE_SCALE;
   c.vz = -vel.y * SCENE_SCALE;
+  // Two-body gravitational acceleration at the anchor, in scene units. This
+  // is what curves the extrapolation back onto the orbit between full SGP4
+  // refreshes; the small SGP4 perturbation terms are re-picked-up on the next
+  // anchor, which is exactly when the drawn orbit line refreshes too.
+  const r2 = c.x * c.x + c.y * c.y + c.z * c.z;
+  const invR3 = r2 > 0 ? 1 / (r2 * Math.sqrt(r2)) : 0;
+  const g = -MU_SCENE * invR3;
+  c.ax = g * c.x;
+  c.ay = g * c.y;
+  c.az = g * c.z;
+  c.anchorId = nextAnchorId++;
   out.x = c.x;
   out.y = c.y;
   out.z = c.z;
   return PROP_FULL;
+}
+
+/**
+ * Read-only view of a satellite's current anchor state (position + velocity in
+ * scene units), or null if it has never been anchored / last propagation
+ * failed. `anchorId` changes whenever a fresh SGP4 anchor is taken — the orbit
+ * path uses it to rebuild ONLY when the underlying state actually moved, so
+ * the drawn ellipse and the moving dot always come from the same instant.
+ */
+export function getSceneAnchor(satrec: satellite.SatRec):
+  (SceneState & { anchorId: number }) | null {
+  const c = (satrec as CachedSatRec).__sceneCache;
+  if (!c || !c.has) return null;
+  return {
+    x: c.x, y: c.y, z: c.z, vx: c.vx, vy: c.vy, vz: c.vz, anchorId: c.anchorId,
+  };
 }
 
 export function getPosition(satrec: satellite.SatRec, date: Date) {
@@ -504,6 +555,68 @@ export function getOrbitEllipsePoints(
     const eciZ = X * pz + Y * qz;
     // ECI → scene mapping, identical to getPosition()
     pts.push([eciX * scale, eciZ * scale, -eciY * scale]);
+  }
+  return pts;
+}
+
+/**
+ * Orbit ellipse built from an already-computed SCENE-space state vector
+ * (position + velocity in scene units, as stored by the propagation cache).
+ *
+ * This is the counterpart to getOrbitEllipsePoints(): instead of running its
+ * own propagate() at some throttled `baseMs`, it consumes the exact anchor the
+ * moving dot is extrapolated from — so the drawn ellipse passes through the
+ * satellite's current position by construction and can never drift out of
+ * alignment with it. The scene mapping (x,z,-y) is a proper rotation, so the
+ * vis-viva / eccentricity-vector derivation is valid directly in scene units
+ * as long as µ is expressed in the same units (MU_SCENE).
+ */
+export function getOrbitEllipseFromSceneState(
+  state: SceneState, segments = 256
+): [number, number, number][] | null {
+  const rx = state.x, ry = state.y, rz = state.z;
+  const vx = state.vx, vy = state.vy, vz = state.vz;
+  const rlen = Math.sqrt(rx * rx + ry * ry + rz * rz);
+  const v2 = vx * vx + vy * vy + vz * vz;
+  if (!(rlen > 0) || !isFinite(v2)) return null;
+
+  const a = 1 / (2 / rlen - v2 / MU_SCENE);
+  if (!isFinite(a) || a <= 0) return null;
+
+  const hx = ry * vz - rz * vy;
+  const hy = rz * vx - rx * vz;
+  const hz = rx * vy - ry * vx;
+  const hlen = Math.sqrt(hx * hx + hy * hy + hz * hz);
+  if (hlen < 1e-12) return null;
+  const wx = hx / hlen, wy = hy / hlen, wz = hz / hlen;
+
+  const rv = rx * vx + ry * vy + rz * vz;
+  const c1 = v2 - MU_SCENE / rlen;
+  const ex = (c1 * rx - rv * vx) / MU_SCENE;
+  const ey = (c1 * ry - rv * vy) / MU_SCENE;
+  const ez = (c1 * rz - rv * vz) / MU_SCENE;
+  const e = Math.sqrt(ex * ex + ey * ey + ez * ez);
+  if (e >= 0.999) return null;
+  if ((a * (1 + e)) > MAX_SANE_R_KM * SCENE_SCALE) return null;
+
+  let px: number, py: number, pz: number;
+  if (e > 1e-6) {
+    px = ex / e; py = ey / e; pz = ez / e;
+  } else {
+    px = rx / rlen; py = ry / rlen; pz = rz / rlen;
+  }
+  const qx = wy * pz - wz * py;
+  const qy = wz * px - wx * pz;
+  const qz = wx * py - wy * px;
+
+  const b = a * Math.sqrt(1 - e * e);
+  const pts: [number, number, number][] = [];
+  for (let i = 0; i <= segments; i++) {
+    const E = (i / segments) * 2 * Math.PI;
+    const X = a * (Math.cos(E) - e);
+    const Y = b * Math.sin(E);
+    // Already in scene space — the state vector was scene-space to begin with.
+    pts.push([X * px + Y * qx, X * py + Y * qy, X * pz + Y * qz]);
   }
   return pts;
 }

@@ -8,6 +8,7 @@ export interface EarthSettings {
   showNightLights: boolean;
   showOrbitPath: boolean;
   showCoverage: boolean;
+  showConstellations: boolean;
   enableMovement: boolean;
   /** Locked to the real wall clock. Warp/time-travel turns this off. */
   realTime: boolean;
@@ -32,6 +33,7 @@ export const DEFAULT_EARTH_SETTINGS: EarthSettings = {
   showNightLights: true,
   showOrbitPath: true,
   showCoverage: true,
+  showConstellations: false,
   enableMovement: true,
   realTime: true,
   timeSpeed: 1,

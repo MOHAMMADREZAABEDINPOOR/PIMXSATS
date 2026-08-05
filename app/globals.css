@@ -1,5 +1,78 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   Touch containment — the page itself must never move
+   --------------------------------------------------------------------------
+   This app is one full-screen 3D surface. Every touch belongs to the camera,
+   so the document is pinned: `position: fixed` on the body makes it exactly
+   the visual viewport, which means it can never scroll, the mobile URL bar
+   can never collapse (that collapse resizes 100dvh and visibly snaps the
+   canvas), and there is nothing to rubber-band. `overscroll-behavior: none`
+   additionally kills pull-to-refresh and scroll chaining.
+   ========================================================================== */
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  /* `none` blocks ALL browser gesture handling at the body level. The canvas
+     already has touch-action:none; scrollable panels opt back into pan-y below.
+     `manipulation` (the old value) was letting the browser claim touch events
+     before our pointer handlers, which is exactly what made the view jump on
+     every tap — particularly severe in the Solar System view where the camera
+     pivot is off-centre. */
+  touch-action: none;
+}
+
+/* The WebGL surface consumes gestures entirely — no browser scroll, no
+   selection, no long-press callout stealing a drag. three-stdlib's
+   TrackballControls (unlike three's own build) never sets this itself. */
+.tracker-surface,
+.tracker-surface canvas {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Scrollable overlay panels: vertical scrolling only, never chained out.
+   These explicitly opt BACK IN to pan-y (the body is now touch-action:none).
+   -webkit-overflow-scrolling:touch gives momentum on iOS Safari. */
+.custom-scrollbar,
+.no-scrollbar {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Name tags floating over the scene — planet, moon and satellite labels — are
+   drei <Html> nodes, which means they are ordinary DOM elements portalled into
+   the canvas wrapper, NOT pixels inside the WebGL surface.
+
+   That distinction is the whole reason for this rule. A full-screen glass modal
+   does paint above them (z-55 against their z-10), but its scrim is translucent
+   by design, and a white chip on black underneath a translucent black sheet is
+   still legibly a white chip — so the planet's name kept showing through the
+   interior-layers panel while the actual 3D scene behind it correctly faded to
+   nothing. Turning the scrim opaque would fix the symptom by throwing away the
+   look; hiding the labels fixes the cause.
+
+   Any overlay that covers the entire viewport sets this class on <body> for as
+   long as it is up. visibility rather than display, so drei's positioning work
+   for a label is not thrown away and restored on every open/close. */
+body.scene-labels-hidden .scene-label {
+  visibility: hidden;
+}
+
 /* Elegant Dark Translucent Custom Scrollbars */
 .custom-scrollbar::-webkit-scrollbar {
   width: 5px;
@@ -61,12 +134,51 @@
   to { transform: rotate(360deg); }
 }
 
+/* A photon bouncing Earth ↔ spacecraft, used by the deep-space latency strip.
+   Lives here rather than in an injected <style> tag so the info card can be
+   rebuilt without re-declaring animations at render time. */
+@keyframes signal-ping {
+  0%   { left: 0; }
+  50%  { left: calc(100% - 0.5rem); }
+  100% { left: 0; }
+}
+
+.animate-signal-ping {
+  animation: signal-ping 3s ease-in-out infinite;
+}
+
 .animate-fade-up {
   animation: fade-up 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .animate-fade-in {
   animation: fade-in 0.25s ease-out both;
+}
+
+/* Planetarium-mode exit hint: readable for a few seconds, then out of the way
+   so an unattended display ends up with nothing but the scene on it. */
+@keyframes kiosk-hint {
+  0%, 55% { opacity: 0.55; }
+  100%    { opacity: 0; }
+}
+
+.animate-kiosk-hint {
+  animation: kiosk-hint 6s ease-out both;
+}
+
+/* Display face for the site wordmark. Orbitron comes from the stylesheet link
+   in app/layout.tsx; everything after it is the fallback chain, so an offline
+   load still gets a wide, technical-looking face rather than the body sans.
+   `-webkit-text-stroke` is deliberately absent — at 300 px widths the wordmark
+   renders at 13 px and a stroke turns it to mud. */
+.font-display {
+  font-family: 'Orbitron', 'Eurostile', 'Bahnschrift', 'DIN Alternate',
+    'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  /* The tracking adds space AFTER the last glyph too, which visually shifts a
+     centred wordmark left. Pull it back by half a step. */
+  text-indent: 0.18em;
 }
 
 /* Slow-moving light sweep across headline text */

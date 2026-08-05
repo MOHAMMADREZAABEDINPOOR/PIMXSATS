@@ -146,10 +146,21 @@ function SolarWing({
 }
 
 function HighGainDish({
-  position, rotation = [0, 0, 0] as [number, number, number], radius = 0.014,
-}: { position: [number, number, number]; rotation?: [number, number, number]; radius?: number }) {
+  position, rotation = [0, 0, 0] as [number, number, number], radius = 0.014, mount = 0.01,
+}: { position: [number, number, number]; rotation?: [number, number, number]; radius?: number; mount?: number }) {
   return (
     <group position={position} rotation={rotation}>
+      {/* support gimbal — a stalk running from the dish back (local -y) toward
+          the bus, plus a pivot knuckle. Without it the reflector looks like a
+          detached dome floating off the spacecraft. */}
+      <mesh position={[0, -mount / 2, 0]}>
+        <cylinderGeometry args={[0.0016, 0.0016, mount, 8]} />
+        <meshStandardMaterial color="#6a6e74" metalness={0.85} roughness={0.4} />
+      </mesh>
+      <mesh position={[0, -mount * 0.15, 0]}>
+        <sphereGeometry args={[0.0026, 12, 10]} />
+        <meshStandardMaterial color="#7d818a" metalness={0.8} roughness={0.4} />
+      </mesh>
       {/* parabolic reflector (open hemisphere) */}
       <mesh>
         <sphereGeometry args={[radius, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2.6]} />

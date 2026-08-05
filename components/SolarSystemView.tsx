@@ -27,6 +27,7 @@ import {
 } from '@/lib/solar-system';
 import { auToSceneRadius } from '@/lib/astronomy';
 import { createCircleSpriteGeometry, createCircleSpriteMaterial } from '@/lib/circle-sprite';
+import { SatelliteModel } from './SatelliteModel';
 
 // Sidereal rotation period of each planet, hours (negative = retrograde spin)
 const DAY_HOURS: Record<string, number> = {
@@ -38,7 +39,7 @@ function HoverLabel({ text, color, y }: { text: string; color: string; y: number
   return (
     <Html center position={[0, y, 0]} style={{ pointerEvents: 'none' }} zIndexRange={[10, 0]}>
       <span
-        className="text-[10px] font-mono px-1.5 py-0.5 rounded whitespace-nowrap select-none animate-fade-in"
+        className="scene-label text-[10px] font-mono px-1.5 py-0.5 rounded whitespace-nowrap select-none animate-fade-in"
         style={{ color, backgroundColor: 'rgba(0,0,0,0.6)' }}
       >
         {text}
@@ -55,7 +56,7 @@ function DotTooltip({ name, color, position }: { name: string; color: string; po
       <Html center style={{ pointerEvents: 'none', userSelect: 'none' }} zIndexRange={[100, 0]}>
         <div
           style={{ transform: 'translateY(calc(-50% - 12px))' }}
-          className="bg-black/90 backdrop-blur-sm px-2 py-1 rounded-md border border-white/20 shadow-lg animate-fade-in"
+          className="scene-label bg-black/90 backdrop-blur-sm px-2 py-1 rounded-md border border-white/20 shadow-lg animate-fade-in"
         >
           <div className="text-[10px] font-mono font-semibold whitespace-nowrap" style={{ color }}>
             {name}
@@ -123,9 +124,10 @@ export function SolarSystemView({
 }: SolarSystemViewProps) {
   const textures = useLoader(
     THREE.TextureLoader,
-    [...PLANETS.map((p) => p.textureUrl), SUN_TEXTURE_URL]
+    [...PLANETS.map((p) => p.textureUrl), SUN_TEXTURE_URL, '/textures/planets/moon.png']
   );
   const sunMap = textures[PLANETS.length];
+  const moonMap = textures[PLANETS.length + 1];
   const sunRef = useRef<THREE.Mesh>(null);
   const [sunHovered, setSunHovered] = useState(false);
 
@@ -158,7 +160,8 @@ export function SolarSystemView({
         onPointerOut={() => setSunHovered(false)}
       >
         <sphereGeometry args={[SUN_SCENE_RADIUS, 32, 32]} />
-        <meshBasicMaterial map={sunMap} toneMapped={false} />
+        {/* DoubleSide: the Sun must never read hollow either. */}
+        <meshBasicMaterial map={sunMap} toneMapped={false} side={THREE.DoubleSide} />
       </mesh>
       <mesh>
         <sphereGeometry args={[SUN_SCENE_RADIUS * 1.18, 32, 32]} />
@@ -172,6 +175,7 @@ export function SolarSystemView({
           key={planet.name}
           planet={planet}
           texture={textures[idx]}
+          moonMap={moonMap}
           simulatedTimeRef={simulatedTimeRef}
           settings={settings}
           satellites={satellites}
@@ -201,11 +205,12 @@ export function SolarSystemView({
 // ---------------------------------------------------------------------------
 
 function PlanetNode({
-  planet, texture, simulatedTimeRef, settings,
+  planet, texture, moonMap, simulatedTimeRef, settings,
   satellites, selectedSat, selectedBody, onSelectSat, onSelectSolarSat, onSelectBody,
 }: {
   planet: PlanetInfo;
   texture: THREE.Texture;
+  moonMap: THREE.Texture;
   simulatedTimeRef: React.MutableRefObject<Date>;
   settings: SolarSettings;
   satellites: SatData[];
@@ -284,7 +289,11 @@ function PlanetNode({
         ) : (
           <mesh ref={sphereRef} onClick={handleClick}>
             <sphereGeometry args={[planet.sceneRadius, 32, 32]} />
-            <meshStandardMaterial map={texture} roughness={0.85} metalness={0.05} />
+            {/* DoubleSide so the planet reads as SOLID: from any angle the
+                surface is drawn — including from inside, where the camera is
+                never supposed to get but a zoom-into-the-planet can briefly
+                pass through before the collision guard pushes it back out. */}
+            <meshStandardMaterial map={texture} roughness={0.85} metalness={0.05} side={THREE.DoubleSide} />
           </mesh>
         )}
 
@@ -311,6 +320,7 @@ function PlanetNode({
             key={moon.name}
             planet={planet}
             moon={moon}
+            moonMap={moonMap}
             simulatedTimeRef={simulatedTimeRef}
             settings={settings}
             isSelected={selectedBody?.kind === 'moon' && selectedBody.moon?.name === moon.name}
@@ -332,16 +342,29 @@ function PlanetNode({
             onSelectSat={(s) => { onSelectSolarSat(null); onSelectBody(null); onSelectSat(s); }}
           />
         )}
+
+        {/* The picked satellite gets its actual 3D model, flown at its real
+            orbital position around Earth — the solar-view answer to "what does
+            this thing look like", using the same procedural models as the
+            Earth view. Only ever one at a time, so its cost is trivial. */}
+        {planet.name === 'Earth' && selectedSat && (
+          <SelectedSwarmSat
+            planet={planet}
+            sat={selectedSat}
+            simulatedTimeRef={simulatedTimeRef}
+          />
+        )}
       </group>
     </group>
   );
 }
 
 function MoonNode({
-  planet, moon, simulatedTimeRef, settings, isSelected, onSelect,
+  planet, moon, moonMap, simulatedTimeRef, settings, isSelected, onSelect,
 }: {
   planet: PlanetInfo;
   moon: MoonInfo;
+  moonMap: THREE.Texture;
   simulatedTimeRef: React.MutableRefObject<Date>;
   settings: SolarSettings;
   isSelected: boolean;
@@ -396,8 +419,9 @@ function MoonNode({
           <meshBasicMaterial visible={false} />
         </mesh>
         <mesh onClick={(e) => { e.stopPropagation(); onSelect(); }}>
-          <sphereGeometry args={[radius, 12, 12]} />
-          <meshStandardMaterial color={moon.color} roughness={0.95} metalness={0.0} />
+          <sphereGeometry args={[radius, 32, 32]} />
+          {/* DoubleSide: see the planet/moon note — the body must read solid. */}
+          <meshStandardMaterial map={moonMap} color={moon.name === 'Moon' ? '#ffffff' : moon.color} roughness={0.8} metalness={0.1} side={THREE.DoubleSide} />
         </mesh>
         {isSelected && (
           <mesh>
@@ -538,7 +562,10 @@ function EarthSwarm({
         ) || 1;
         const rKm = len * 6371;
         const dist = planet.sceneRadius * earthSatSceneFactor(rKm);
-        const s = sat === selectedSat ? 4 : 1;
+        // The selected satellite is drawn as its real 3D model by
+        // SelectedSwarmSat, so its dot is hidden (scale 0) rather than merely
+        // enlarged — otherwise a bright speck sits inside the model's body.
+        const s = sat === selectedSat ? 0 : 1;
         matrices[base] = s;
         matrices[base + 5] = s;
         matrices[base + 10] = s;
@@ -598,6 +625,70 @@ function EarthSwarm({
       />
       {hovered && <DotTooltip name={hovered.sat.name} color={hovered.sat.color} position={hovered.position} />}
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The selected Earth satellite, shown as its real 3D model in the solar view.
+// ---------------------------------------------------------------------------
+
+// Solar-view Earth is drawn at planet.sceneRadius (~0.0275 scene units), but the
+// procedural SatelliteModel is authored around Earth-view scale where the globe
+// has radius 1. Rendered raw it would be dozens of times too big, so it is
+// scaled down by the same planet-radius ratio and then nudged up a little so it
+// stays legible against the tiny globe without dwarfing it. Empirically this
+// reads as a real spacecraft parked in orbit rather than a speck or a moon.
+const SWARM_MODEL_SCALE = 0.9;
+// Re-anchor the selected model's propagation cache on the same 5 s cadence the
+// Earth view's tracked satellite uses — short enough that the model never lags
+// its dot, long enough that the correction is sub-metre and invisible.
+const SWARM_MODEL_MAX_AGE_MS = 5000;
+
+function SelectedSwarmSat({
+  planet, sat, simulatedTimeRef,
+}: {
+  planet: PlanetInfo;
+  sat: SatData;
+  simulatedTimeRef: React.MutableRefObject<Date>;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  const scratch = useMemo<ScenePos>(() => ({ x: 0, y: 0, z: 0 }), []);
+
+  // The model is authored at Earth-view scale (globe radius = 1); bring it down
+  // to the solar-view globe and hold it steady across zooms.
+  const modelScale = planet.sceneRadius * SWARM_MODEL_SCALE;
+
+  useFrame(() => {
+    const g = groupRef.current;
+    if (!g) return;
+    const nowMs = simulatedTimeRef.current.getTime();
+    if (nowMs < sat.launchMs) { g.visible = false; return; }
+    const res = getScenePositionCached(sat.satrec, nowMs, scratch, SWARM_MODEL_MAX_AGE_MS, performance.now());
+    if (res === PROP_FAILED) { g.visible = false; return; }
+    g.visible = true;
+    // Same radial placement the swarm dot uses, so the model sits exactly where
+    // its dot was — see EarthSwarm's per-instance transform.
+    const len = Math.sqrt(scratch.x * scratch.x + scratch.y * scratch.y + scratch.z * scratch.z) || 1;
+    const rKm = len * 6371;
+    const dist = planet.sceneRadius * earthSatSceneFactor(rKm);
+    g.position.set(
+      (scratch.x / len) * dist,
+      (scratch.y / len) * dist,
+      (scratch.z / len) * dist,
+    );
+  });
+
+  return (
+    <group
+      ref={groupRef}
+      scale={modelScale}
+      // Swallow pointer events so clicking the model can't fall through to
+      // Earth's inflated hit sphere and swap the selection to the planet.
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <SatelliteModel category={sat.category} color={sat.color} />
+    </group>
   );
 }
 

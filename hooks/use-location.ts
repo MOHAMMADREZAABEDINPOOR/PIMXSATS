@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import tzLookup from 'tz-lookup';
 
 export interface UserLocation {
@@ -10,6 +10,15 @@ export interface UserLocation {
    *  'gps'    — derived from real device coordinates (VPN-proof, most accurate)
    *  'device' — the OS timezone setting (also VPN-independent) */
   source: 'gps' | 'device';
+  /** Progress of the geolocation request, for driving an in-place button:
+   *  'idle'    — not yet asked (or unsupported)
+   *  'pending' — a request is in flight
+   *  'granted' — coordinates obtained
+   *  'denied'  — the user (or the OS) refused */
+  permission: 'idle' | 'pending' | 'granted' | 'denied';
+  /** Ask the browser for location now. Safe to call repeatedly; a denied
+   *  request can be retried (the browser decides whether to re-prompt). */
+  request: () => void;
 }
 
 /**
@@ -22,19 +31,26 @@ export interface UserLocation {
  *     device actually is, regardless of network routing.
  *  2. Fallback: the OS timezone (Intl API) — set on the device itself,
  *     also unaffected by the network.
+ *
+ * The request fires once automatically on mount (so nothing changes for users
+ * who have already granted it), but `request()` is also exposed so a panel can
+ * offer an explicit "enable location" button when permission was never granted
+ * or was dismissed.
  */
 export function useUserLocation(): UserLocation {
-  const [location, setLocation] = useState<UserLocation>(() => ({
+  const [location, setLocation] = useState<Omit<UserLocation, 'request'>>(() => ({
     timeZone:
       typeof window === 'undefined'
         ? 'UTC'
         : Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     coords: null,
     source: 'device',
+    permission: 'idle',
   }));
 
-  useEffect(() => {
-    if (!('geolocation' in navigator)) return;
+  const request = useCallback(() => {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) return;
+    setLocation((prev) => (prev.permission === 'pending' ? prev : { ...prev, permission: 'pending' }));
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const lat = pos.coords.latitude;
@@ -49,12 +65,19 @@ export function useUserLocation(): UserLocation {
           timeZone: timeZone ?? prev.timeZone,
           coords: { lat, lon },
           source: timeZone ? 'gps' : prev.source,
+          permission: 'granted',
         }));
       },
-      () => { /* permission denied — device timezone still applies */ },
+      () => {
+        // permission denied — device timezone still applies
+        setLocation((prev) => ({ ...prev, permission: 'denied' }));
+      },
       { enableHighAccuracy: false, timeout: 8000, maximumAge: 600000 }
     );
   }, []);
 
-  return location;
+  // Fire once on mount so existing (already-granted) users see no change.
+  useEffect(() => { request(); }, [request]);
+
+  return { ...location, request };
 }
