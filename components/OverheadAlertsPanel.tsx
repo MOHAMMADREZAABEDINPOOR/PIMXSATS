@@ -130,18 +130,18 @@ export function OverheadAlertsPanel({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-bold text-gray-300 uppercase tracking-widest flex items-center gap-1.5">
-          <BellRing className="w-3.5 h-3.5 text-emerald-400" /> Overhead Alerts
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        <span className="text-xs font-bold text-gray-300 uppercase tracking-widest flex items-center gap-1.5 min-w-0">
+          <BellRing className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> Overhead Alerts
         </span>
         {perm === 'granted' ? (
-          <span className="flex items-center gap-1 text-[9px] font-mono text-emerald-300 border border-emerald-400/30 rounded-md px-1.5 py-0.5">
+          <span className="flex items-center gap-1 text-[9px] font-mono text-emerald-300 border border-emerald-400/30 rounded-md px-1.5 py-0.5 shrink-0">
             <Bell className="w-2.5 h-2.5" /> ON
           </span>
         ) : perm === 'unsupported' ? null : (
           <button
             onClick={enableNotifications}
-            className="flex items-center gap-1 text-[9px] font-mono font-bold text-gray-300 border border-white/15 rounded-md px-1.5 py-0.5 hover:border-emerald-400/40 hover:text-emerald-300"
+            className="flex items-center gap-1 text-[9px] font-mono font-bold text-gray-300 border border-white/15 rounded-md px-1.5 py-0.5 hover:border-emerald-400/40 hover:text-emerald-300 shrink-0"
           >
             <BellOff className="w-2.5 h-2.5" /> {perm === 'denied' ? 'BLOCKED' : 'NOTIFY ME'}
           </button>
@@ -194,7 +194,15 @@ export function OverheadAlertsPanel({
           )}
 
           {/* The rest of the queue. */}
-          <div className="space-y-1 max-h-[28vh] overflow-y-auto custom-scrollbar pr-1 -mr-1">
+          {/* The cap and the inner scroll are DESKTOP ONLY. In the mobile drawer
+              this list sat in a `28vh` box that scrolled by itself, inside a
+              drawer that also scrolls — so a drag starting on a pass row moved
+              the list and not the drawer, and the card was a fixed slab of
+              viewport regardless of how many passes there were. On a phone the
+              drawer is the one and only scroller; on desktop the card has a fixed
+              height, so there the cap is what keeps the fleet and the launches
+              below it reachable. */}
+          <div className="space-y-1 lg:max-h-[28vh] lg:overflow-y-auto custom-scrollbar pr-1 -mr-1">
             {alerts.filter((a) => a !== upcoming).map((a) => (
               <button
                 key={a.key}

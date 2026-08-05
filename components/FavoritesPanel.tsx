@@ -36,11 +36,11 @@ export function FavoritesPanel({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-bold text-gray-300 uppercase tracking-widest flex items-center gap-1.5">
-          <Star className="w-3.5 h-3.5 text-amber-400" /> My Fleet
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        <span className="text-xs font-bold text-gray-300 uppercase tracking-widest flex items-center gap-1.5 min-w-0">
+          <Star className="w-3.5 h-3.5 text-amber-400 shrink-0" /> My Fleet
         </span>
-        <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-white/5 text-gray-500 font-mono">
+        <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-white/5 text-gray-500 font-mono shrink-0 whitespace-nowrap">
           {ids.length} / {MAX_FAVORITES}
         </span>
       </div>
@@ -57,7 +57,10 @@ export function FavoritesPanel({
           the current catalog snapshot — they may return in a later update. Nothing has been deleted.
         </div>
       ) : (
-        <div className="space-y-1 max-h-[40vh] overflow-y-auto custom-scrollbar pr-1 -mr-1">
+        /* Desktop-only cap and inner scroll — same reason as the alerts list:
+           in the mobile drawer a `40vh` self-scrolling box inside a scrolling
+           drawer means a drag on a fleet row never moves the drawer. */
+        <div className="space-y-1 lg:max-h-[40vh] lg:overflow-y-auto custom-scrollbar pr-1 -mr-1">
           {fleet.map((sat) => {
             const isSelected = sat === selectedSat;
             return (

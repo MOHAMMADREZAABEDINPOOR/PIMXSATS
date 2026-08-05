@@ -205,9 +205,9 @@ function SensitivityControl({
   useEffect(() => { setDevice(detectDeviceClass()); }, []);
   return (
     <div className="space-y-1.5 pt-2 border-t border-white/5">
-      <span className="text-[9px] font-mono text-gray-500 uppercase tracking-widest flex items-center justify-between gap-1.5">
-        <span className="flex items-center gap-1.5">
-          <Hand className="w-3 h-3 text-cyan-400" /> Gesture sensitivity
+      <span className="text-[9px] font-mono text-gray-500 uppercase tracking-widest flex items-center justify-between gap-1.5 min-w-0">
+        <span className="flex items-center gap-1.5 min-w-0">
+          <Hand className="w-3 h-3 text-cyan-400 shrink-0" /> <span className="truncate">Gesture sensitivity</span>
         </span>
         {device && (
           <span
@@ -218,7 +218,14 @@ function SensitivityControl({
           </span>
         )}
       </span>
-      <div className="grid grid-cols-3 gap-1.5">
+      {/* Wraps instead of being three forced columns. `grid-cols-3` gave each
+          button a third of the width whether or not its label fitted: inside the
+          mobile drawer that is ~60 px for a word like "Standard", and the label
+          does not shrink — it spills out of the button and out of the drawer,
+          which is one of the things that was making the drawer scroll sideways.
+          `grow basis-16` keeps the row looking like three equal buttons wherever
+          they fit and drops one onto a second line where they do not. */}
+      <div className="flex flex-wrap gap-1.5">
         {SENSITIVITY_OPTIONS.map((opt) => {
           const isOn = sensitivity === opt.id;
           return (
@@ -227,7 +234,7 @@ function SensitivityControl({
               onClick={() => onChange(opt.id)}
               title={opt.hint}
               aria-pressed={isOn}
-              className={`px-2 py-1 rounded-lg text-[10px] font-mono font-bold border chip-btn ${
+              className={`grow basis-16 px-2 py-1 rounded-lg text-[10px] font-mono font-bold border chip-btn ${
                 isOn
                   ? 'bg-gradient-to-b from-cyan-600/60 to-cyan-800/40 border-cyan-400/60 text-white shadow-[0_0_16px_-4px_rgba(34,211,238,0.6)]'
                   : 'bg-white/[0.04] border-white/10 text-gray-400 hover:border-white/25'
@@ -410,8 +417,12 @@ function TimeAndScenePanel({
         <span className="text-[9px] font-mono text-gray-500 uppercase tracking-widest">
           {isEarth ? 'Earth Scene' : 'Solar System Scene'}
         </span>
+        {/* One column under 360 px, two above it. Each row is a label plus a
+            30 px switch, so at two columns inside the mobile drawer the label is
+            left with ~50 px and truncates to three characters — "Nig…", "Atm…".
+            Below that width one column per row is simply what fits. */}
         {isEarth ? (
-          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+          <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-x-3 gap-y-2">
             <ToggleRow label="Clouds" checked={earthSettings.showClouds}
               onChange={(v) => onEarthSettingsChange({ ...earthSettings, showClouds: v })} />
             <ToggleRow label="Atmosphere" checked={earthSettings.showAtmosphere}
@@ -426,7 +437,7 @@ function TimeAndScenePanel({
               onChange={(v) => onEarthSettingsChange({ ...earthSettings, enableMovement: v })} />
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+          <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-x-3 gap-y-2">
             <ToggleRow label="Orbit Lines" checked={solarSettings.showOrbits}
               onChange={(v) => onSolarSettingsChange({ ...solarSettings, showOrbits: v })} />
             <ToggleRow label="Moons" checked={solarSettings.showMoons}
@@ -714,14 +725,14 @@ const CategoriesPanel = memo(function CategoriesPanel({
     // the bottom rows off with nothing able to scroll to them.
     <div className="flex flex-col gap-3 min-h-0 h-full">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-bold text-gray-300 uppercase tracking-widest flex items-center gap-1.5">
-          <SlidersHorizontal className="w-3.5 h-3.5 text-blue-400" /> Filters
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        <span className="text-xs font-bold text-gray-300 uppercase tracking-widest flex items-center gap-1.5 min-w-0">
+          <SlidersHorizontal className="w-3.5 h-3.5 text-blue-400 shrink-0" /> Filters
         </span>
         {activeCount > 0 && (
           <button
             onClick={() => { onSelectedCategoriesChange([]); onSelectedBandsChange([]); }}
-            className="text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-400/30 text-blue-300 hover:bg-blue-500/25 chip-btn"
+            className="text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-400/30 text-blue-300 hover:bg-blue-500/25 chip-btn shrink-0 whitespace-nowrap"
           >
             CLEAR ({activeCount})
           </button>
@@ -748,7 +759,7 @@ const CategoriesPanel = memo(function CategoriesPanel({
                 }`}
               >
                 <span className="text-[10px] font-bold">{band.label}</span>
-                <span className={`text-[9px] ${isOn ? 'text-blue-200' : 'text-gray-600'}`}>
+                <span className={`text-[9px] max-w-full truncate ${isOn ? 'text-blue-200' : 'text-gray-600'}`}>
                   {(bandCounts[band.id] ?? 0).toLocaleString()}
                 </span>
               </button>
@@ -1781,7 +1792,7 @@ export function UIOverlay({
                   </div>
                 </div>
                 <span
-                  className="text-[9px] font-bold uppercase px-2 py-0.5 rounded-md whitespace-nowrap tracking-wider font-mono shrink-0"
+                  className="text-[9px] font-bold uppercase px-2 py-0.5 rounded-md truncate max-w-[45%] tracking-wider font-mono shrink-0"
                   style={{
                     backgroundColor: `${item.color}22`,
                     color: item.color,
@@ -1969,8 +1980,26 @@ export function UIOverlay({
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-3 sm:p-4 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-3 sm:space-y-4 overflow-y-auto custom-scrollbar flex-1">
-          <div className="space-y-2">
+        {/* `overflow-x-hidden` is deliberate, and it is the fix for the sideways
+            scrolling rather than a cover-up.
+
+            A box with `overflow-y: auto` and `overflow-x: visible` is not a thing
+            CSS allows: the used value of `overflow-x` becomes `auto` too. So this
+            scroller was one sideways-scrolling surface, and ANY descendant wider
+            than ~230 px — a squeezed button whose label spills out of it, an
+            unbreakable word, a grid with more fixed columns than fit — turned the
+            whole drawer into something you could drag left and right, with every
+            card then sitting at the wrong offset. Nothing in a 275 px drawer is
+            ever meant to be reached by scrolling horizontally, so the axis is
+            simply closed; the squeeze points that were pushing against it are
+            fixed below (the sensitivity buttons and the scene toggles now wrap
+            instead of spilling), so closing it does not hide anything.
+
+            `min-w-0` on the column children for the same reason: as flex items
+            their automatic minimum size is their content, which lets a wide child
+            push the drawer instead of adapting to it. */}
+        <div className="p-3 sm:p-4 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-3 sm:space-y-4 overflow-y-auto overflow-x-hidden custom-scrollbar flex-1 min-w-0 [&>*]:min-w-0">
+          <div className="space-y-2 min-w-0">
             {searchBox}
             {searchResults}
           </div>
