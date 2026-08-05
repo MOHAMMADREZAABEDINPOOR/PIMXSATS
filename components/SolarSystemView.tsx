@@ -27,6 +27,7 @@ import {
 } from '@/lib/solar-system';
 import { auToSceneRadius } from '@/lib/astronomy';
 import { createCircleSpriteGeometry, createCircleSpriteMaterial } from '@/lib/circle-sprite';
+import { useTapCandidate, useTapTracking, wasTap } from '@/lib/tap-gesture';
 import { SatelliteModel } from './SatelliteModel';
 
 // Sidereal rotation period of each planet, hours (negative = retrograde spin)
@@ -130,6 +131,12 @@ export function SolarSystemView({
   const moonMap = textures[PLANETS.length + 1];
   const sunRef = useRef<THREE.Mesh>(null);
   const [sunHovered, setSunHovered] = useState(false);
+
+  // Keep the tap/drag arbiter alive for every body in this scene. The solar view
+  // had exactly the Earth view's disease and worse: a planet's hit sphere is 1.5×
+  // the planet and a moon's is 2×, so any attempt to swing the camera around
+  // pressed something, and every swing re-aimed the camera at whatever it pressed.
+  useTapTracking();
 
   // Probes present at the simulated date (time travel hides future launches).
   // Re-evaluated at most twice per second.
@@ -254,7 +261,10 @@ function PlanetNode({
   });
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
+    // stopPropagation stays outside the tap test: a camera drag across this
+    // planet must not fall through to anything behind it either.
     e.stopPropagation();
+    if (!wasTap()) return;
     onSelectSat(null);
     onSelectSolarSat(null);
     onSelectBody({ kind: 'planet', planet });
@@ -402,6 +412,12 @@ function MoonNode({
     }
   });
 
+  const handleClick = (e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    if (!wasTap()) return;
+    onSelect();
+  };
+
   return (
     <group>
       {settings.showMoonOrbits && (
@@ -411,14 +427,14 @@ function MoonNode({
         {/* invisible hit area — true-scale moons are far too small to click */}
         <mesh
           raycast={hitRaycast}
-          onClick={(e) => { e.stopPropagation(); onSelect(); }}
+          onClick={handleClick}
           onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
           onPointerOut={() => setHovered(false)}
         >
           <sphereGeometry args={[hitRadius, 8, 8]} />
           <meshBasicMaterial visible={false} />
         </mesh>
-        <mesh onClick={(e) => { e.stopPropagation(); onSelect(); }}>
+        <mesh onClick={handleClick}>
           <sphereGeometry args={[radius, 32, 32]} />
           {/* DoubleSide: see the planet/moon note — the body must read solid. */}
           <meshStandardMaterial map={moonMap} color={moon.name === 'Moon' ? '#ffffff' : moon.color} roughness={0.8} metalness={0.1} side={THREE.DoubleSide} />
@@ -469,6 +485,10 @@ function EarthSwarm({
   const cursorRef = useRef(0);
   const lastHoverRef = useRef(0);
   const [hovered, setHovered] = useState<{ sat: SatData; position: THREE.Vector3 } | null>(null);
+  const armTap = useTapCandidate<number>((index) => {
+    const sat = satellites[index];
+    if (sat) onSelectSat(sat);
+  });
 
   useEffect(() => setHovered(null), [satellites]);
 
@@ -602,7 +622,9 @@ function EarthSwarm({
         onPointerDown={(e) => {
           e.stopPropagation();
           setHovered(null);
-          if (e.instanceId !== undefined) onSelectSat(satellites[e.instanceId]);
+          // Same rule as the Earth view's dots: capture WHICH dot was pressed
+          // now (they move), select only if the press ends as a tap.
+          if (e.instanceId !== undefined) armTap(e, e.instanceId);
         }}
         // Swallow the click so it can't fall through to the planet's hit
         // sphere behind the dot and replace the satellite selection.
@@ -724,7 +746,7 @@ function ProbeNode({
   return (
     <group ref={groupRef}>
       <mesh
-        onClick={(e) => { e.stopPropagation(); onSelect(probe); }}
+        onClick={(e) => { e.stopPropagation(); if (!wasTap()) return; onSelect(probe); }}
         onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
         onPointerOut={() => setHovered(false)}
       >

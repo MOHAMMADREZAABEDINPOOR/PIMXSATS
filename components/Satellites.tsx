@@ -8,6 +8,7 @@ import {
   getScenePositionCached, PROP_FAILED, PROP_FULL,
 } from '@/lib/satellite';
 import { createCircleSpriteGeometry, createCircleSpriteMaterial } from '@/lib/circle-sprite';
+import { useTapCandidate } from '@/lib/tap-gesture';
 import { Html } from '@react-three/drei';
 
 interface SatellitesProps {
@@ -44,27 +45,12 @@ const isCoarsePointer = () =>
 // somewhere on it, and with 10,000 dots on screen and a 25 px tap circle,
 // "somewhere" is usually on a satellite. Every rotation opened a detail card.
 //
-// So a press is now only a selection if it ends like a tap — released within
-// TAP_SLOP_PX of where it started, inside TAP_MAX_MS, with no second finger
-// involved. Anything else is a camera gesture and the dot under it is ignored.
-//
-// The arbitration is watched on `window`, not on the mesh: satellites move, and
-// a finger held still for 400 ms is no longer over the dot it pressed. Judging
-// the release by the DOM event that happens to land on the instanced mesh would
-// drop exactly the taps that took a moment.
+// The arbitration itself now lives in lib/tap-gesture.ts, shared with the solar
+// view (which had the identical problem on planets and moons). What stays here
+// is the reason it cannot be judged by the DOM event that lands on the mesh:
+// satellites move, and a finger held still for 400 ms is no longer over the dot
+// it pressed — so the instance is captured on press and delivered on release.
 // ---------------------------------------------------------------------------
-const TAP_MAX_MS = 450;
-const TAP_SLOP_PX = 6;
-const TAP_SLOP_PX_COARSE = 14;
-
-interface TapCandidate {
-  pointerId: number;
-  index: number;
-  x: number;
-  y: number;
-  startedAt: number;
-  slop: number;
-}
 
 const tempColor = new THREE.Color();
 const scratchPos: ScenePos = { x: 0, y: 0, z: 0 };
@@ -75,7 +61,6 @@ export function Satellites({ satellites, onClick, selectedSat, simulatedTimeRef,
   const cursorRef = useRef(0);
   const lastHoverRef = useRef(0);
   const selectedIndexRef = useRef(-1);
-  const tapRef = useRef<TapCandidate | null>(null);
   const [hoveredSat, setHoveredSat] = useState<{ sat: SatData; index: number } | null>(null);
 
   // Billboarded perfect-circle sprite (same radius/colors as the old spheres)
@@ -348,75 +333,20 @@ export function Satellites({ satellites, onClick, selectedSat, simulatedTimeRef,
     };
   }, [posCache]);
 
+  // Selection is decided on RELEASE, by the shared arbiter — a press that turns
+  // into a camera drag, a hold, or a pinch never selects the dot it started on.
+  const armTap = useTapCandidate<number>((index) => {
+    const sat = satellites[index];
+    if (!sat) return;
+    onClick(sat);
+    setHoveredSat(null);
+  });
+
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
     if (e.instanceId === undefined) return;
-    // Arm a candidate; the window listeners below decide whether it was a tap.
-    tapRef.current = {
-      pointerId: e.pointerId,
-      index: e.instanceId,
-      x: e.clientX,
-      y: e.clientY,
-      startedAt: performance.now(),
-      slop: e.pointerType === 'touch' || e.pointerType === 'pen'
-        ? TAP_SLOP_PX_COARSE
-        : TAP_SLOP_PX,
-    };
+    armTap(e, e.instanceId);
   };
-
-  // Tap arbitration. Installed once and driven off refs so a catalog change
-  // (filters, era scrubbing) never re-binds four window listeners.
-  const onClickRef = useRef(onClick);
-  onClickRef.current = onClick;
-  const satellitesRef = useRef(satellites);
-  satellitesRef.current = satellites;
-
-  useEffect(() => {
-    const drifted = (t: TapCandidate, e: PointerEvent) =>
-      Math.hypot(e.clientX - t.x, e.clientY - t.y) > t.slop;
-
-    const onMove = (e: PointerEvent) => {
-      const t = tapRef.current;
-      if (!t || t.pointerId !== e.pointerId) return;
-      // Past the slop it is a camera drag, permanently — re-entering the circle
-      // later must not resurrect the selection.
-      if (drifted(t, e)) tapRef.current = null;
-    };
-
-    const onUp = (e: PointerEvent) => {
-      const t = tapRef.current;
-      if (!t || t.pointerId !== e.pointerId) return;
-      tapRef.current = null;
-      if (performance.now() - t.startedAt > TAP_MAX_MS) return;
-      if (drifted(t, e)) return;
-      const sat = satellitesRef.current[t.index];
-      if (!sat) return;
-      onClickRef.current(sat);
-      setHoveredSat(null);
-    };
-
-    // A second finger means pinch-zoom. Nothing that starts as a pinch may end
-    // as a selection, even if the first finger never moved.
-    const onExtraDown = (e: PointerEvent) => {
-      const t = tapRef.current;
-      if (t && t.pointerId !== e.pointerId) tapRef.current = null;
-    };
-
-    const onCancel = () => { tapRef.current = null; };
-
-    window.addEventListener('pointermove', onMove, { passive: true });
-    window.addEventListener('pointerup', onUp, { passive: true });
-    window.addEventListener('pointerdown', onExtraDown, { passive: true });
-    window.addEventListener('pointercancel', onCancel, { passive: true });
-    window.addEventListener('blur', onCancel);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointerdown', onExtraDown);
-      window.removeEventListener('pointercancel', onCancel);
-      window.removeEventListener('blur', onCancel);
-    };
-  }, []);
 
   const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();

@@ -109,16 +109,24 @@ export function detectDeviceClass(): DeviceClass {
  *  the camera. Thinking in "degrees per full swipe" is the only way to keep
  *  this honest across a 390 px phone and a 2560 px monitor.
  *
- *  Touch classes sit well below the pointer classes: a finger IS the cursor, so
- *  the scene rotating further than the finger travelled reads as the camera
+ *  Touch classes sit below the pointer classes: a finger IS the cursor, so the
+ *  scene rotating much further than the finger travelled reads as the camera
  *  outrunning the hand. A mouse has no such expectation — the cursor is already
  *  an abstraction — so it can afford a longer throw and wants one, since a mouse
  *  drag is limited by desk space. Laptop sits just under desktop because a
- *  trackpad drag is limited by the pad, which is smaller than a desk. */
+ *  trackpad drag is limited by the pad, which is smaller than a desk.
+ *
+ *  The PHONE row is doubled from what that reasoning first produced. Reported as
+ *  "very, very annoying": on a 390 px screen a 42°/swipe throw means turning the
+ *  camera a quarter turn takes three separate drags, each of which has to start
+ *  outside a 10 px dead zone. The finger-tracking argument is real but it was
+ *  being applied to a screen so small that "the same as the finger" is barely any
+ *  rotation at all. A phone now gets the longest throw per swipe of any class,
+ *  which is the honest conclusion: it has the least room to swipe in. */
 const DEGREES_PER_SWIPE: Record<Sensitivity, Record<DeviceClass, number>> = {
-  calm: { phone: 26, tablet: 32, laptop: 46, desktop: 55 },
-  standard: { phone: 42, tablet: 50, laptop: 68, desktop: 78 },
-  fast: { phone: 64, tablet: 76, laptop: 96, desktop: 110 },
+  calm: { phone: 52, tablet: 32, laptop: 46, desktop: 55 },
+  standard: { phone: 84, tablet: 50, laptop: 68, desktop: 78 },
+  fast: { phone: 128, tablet: 76, laptop: 96, desktop: 110 },
 };
 
 /** Zoom gain — the multiplier on the log-space step from a pinch or a wheel/
@@ -128,12 +136,15 @@ const DEGREES_PER_SWIPE: Record<Sensitivity, Record<DeviceClass, number>> = {
  *  The laptop row is the small one ON PURPOSE, and it is the point of this whole
  *  table: a trackpad delivers roughly an order of magnitude more zoom events per
  *  second than a wheel, so it needs a much smaller step per event to end up at
- *  the same speed under the hand. Tablet sits under phone because a tablet pinch
- *  spans a longer finger travel for the same intent. */
+ *  the same speed under the hand.
+ *
+ *  The phone row is doubled for the same reason as the rotation row above — a
+ *  pinch on a 390 px screen has perhaps 150 px of finger separation to work with,
+ *  so a gain under 1 spends that whole travel going almost nowhere. */
 const ZOOM_GAIN: Record<Sensitivity, Record<DeviceClass, number>> = {
-  calm: { phone: 0.55, tablet: 0.45, laptop: 0.26, desktop: 0.7 },
-  standard: { phone: 0.75, tablet: 0.62, laptop: 0.38, desktop: 0.95 },
-  fast: { phone: 1.0, tablet: 0.85, laptop: 0.55, desktop: 1.25 },
+  calm: { phone: 1.1, tablet: 0.45, laptop: 0.26, desktop: 0.7 },
+  standard: { phone: 1.5, tablet: 0.62, laptop: 0.38, desktop: 0.95 },
+  fast: { phone: 2.0, tablet: 0.85, laptop: 0.55, desktop: 1.25 },
 };
 
 /** Drain rate of the input smoother, 1/s. Lower = smoother and more glide.
@@ -150,15 +161,21 @@ const RESPONSE: Record<Sensitivity, Record<DeviceClass, number>> = {
 /** Backstops, per class. Neither should ever be reached in normal use — they
  *  exist so that one absurd input sample (a touch driver glitch, a wheel that
  *  reports a whole page, a trackpad momentum spike) cannot throw the camera
- *  across the scene in a single frame. The touch classes are the tightest
- *  because a hand holding a moving device produces the worst outliers, and the
- *  laptop zoom cap is tight for the same reason its gain is small. */
+ *  across the scene in a single frame.
+ *
+ *  The phone caps are doubled alongside the phone gains, and they HAD to be:
+ *  neither of these two clamps is refunded to the pending buffer (see
+ *  SmoothControls.update — the angle backstop is explicitly not refunded, and the
+ *  zoom clamp is a plain min/max), so a doubled gain feeding an unchanged cap is
+ *  not a faster camera, it is the same camera plus half the input thrown away.
+ *  Doubling both keeps the same headroom ratio the other classes have, which is
+ *  what makes them backstops rather than the thing setting the speed. */
 const MAX_ANGLE_PER_FRAME: Record<DeviceClass, number> = {
-  phone: 0.05, tablet: 0.07, laptop: 0.16, desktop: 0.25,
+  phone: 0.1, tablet: 0.07, laptop: 0.16, desktop: 0.25,
 };
 
 const MAX_ZOOM_LOG_PER_FRAME: Record<DeviceClass, number> = {
-  phone: 0.07, tablet: 0.09, laptop: 0.1, desktop: 0.25,
+  phone: 0.14, tablet: 0.09, laptop: 0.1, desktop: 0.25,
 };
 
 /** Finger travel, in CSS px, before a one-finger gesture engages at all. Big

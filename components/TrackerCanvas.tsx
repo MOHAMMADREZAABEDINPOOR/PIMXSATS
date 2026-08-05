@@ -4,7 +4,7 @@
    mutating three.js objects (camera, materials) inside useFrame; that is the
    library's intended imperative API, not a React render-phase mutation. */
 
-import { Canvas, useFrame, useThree, useLoader } from '@react-three/fiber';
+import { Canvas, useFrame, useThree, useLoader, type ThreeEvent } from '@react-three/fiber';
 import { Stars, Line, Html } from '@react-three/drei';
 import { CameraControls } from './CameraControls';
 import { Earth } from './Earth';
@@ -24,6 +24,7 @@ import {
 import { EarthSettings, SolarSettings } from '@/lib/settings';
 import { getSunSceneDirection, getMoonGeocentric } from '@/lib/astronomy';
 import { Sensitivity } from '@/lib/interaction';
+import { useTapTracking, wasTap } from '@/lib/tap-gesture';
 import type { SmoothControls } from '@/lib/orbit-controls';
 import { TOUR_STOPS, TourStop, tourStandoff } from '@/lib/tour';
 import * as THREE from 'three';
@@ -1347,6 +1348,7 @@ function MoonNodeEarth({
   const sphereRef = useRef<THREE.Mesh>(null);
   const [hovered, setHovered] = useState(false);
   const moonTexture = useLoader(THREE.TextureLoader, '/textures/planets/moon.png');
+  useTapTracking();
 
   const isSelected = selectedBody?.kind === 'moon' && selectedBody.moon?.name === 'Moon';
 
@@ -1385,7 +1387,11 @@ function MoonNodeEarth({
     }
   });
 
-  const handleSelect = () => {
+  const handleSelect = (e: ThreeEvent<MouseEvent>) => {
+    // Never on a camera gesture: this hit sphere is 0.55 units across, so a
+    // swipe that starts anywhere near the Moon used to open its card.
+    e.stopPropagation();
+    if (!wasTap()) return;
     const earth = PLANET_BY_NAME.get('Earth')!;
     const moon = earth.moons[0];
     onSelectBody({ kind: 'moon', planet: earth, moon });
@@ -1402,7 +1408,7 @@ function MoonNodeEarth({
       <group ref={moonRef}>
         {/* Invisible hit box */}
         <mesh
-          onClick={(e) => { e.stopPropagation(); handleSelect(); }}
+          onClick={handleSelect}
           onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
           onPointerOut={() => setHovered(false)}
         >
@@ -1411,7 +1417,7 @@ function MoonNodeEarth({
         </mesh>
 
         {/* Moon body with high quality texture */}
-        <mesh ref={sphereRef} onClick={(e) => { e.stopPropagation(); handleSelect(); }}>
+        <mesh ref={sphereRef} onClick={handleSelect}>
           <sphereGeometry args={[radius, 32, 32]} />
           {/* DoubleSide: the Moon must read solid, never a hollow shell. */}
           <meshStandardMaterial map={moonTexture} roughness={0.9} metalness={0.05} side={THREE.DoubleSide} />

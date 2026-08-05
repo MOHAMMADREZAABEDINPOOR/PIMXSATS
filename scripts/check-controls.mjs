@@ -670,5 +670,91 @@ function check(name, cond, detail) {
   console.log(`        (OVERVIEW pose: cam.up is ${toWorldUp.toFixed(3)} from world up, ${toProjected.toFixed(4)} from the projected up)`);
 }
 
+// --- 18. The phone doubling has to ARRIVE, not just be in the table --------
+// "On a phone the zoom and the view-angle change are far too weak." Both phone
+// gains are doubled — but a gain is only half the story, because two of the
+// per-frame clamps are NOT refunded to the pending buffer: the angle backstop is
+// explicitly dropped, and the zoom clamp is a plain min/max. Doubling the gain
+// under an unchanged clamp is not a faster camera, it is the same camera plus
+// half the input thrown away. So this measures the DELIVERED motion of one
+// identical gesture, old tuning vs new, over the ~30 frames a hand actually
+// spends on it.
+{
+  // The tuning as it shipped before this change, clamps included.
+  const oldPhone = {
+    ...gainsFor('standard', 'phone'),
+    rotatePerEdge: (42 * Math.PI) / 180,
+    zoom: 0.75,
+    maxAnglePerFrame: 0.05,
+    maxZoomLogPerFrame: 0.07,
+  };
+  const newPhone = gainsFor('standard', 'phone');
+
+  check('the phone rotate gain is exactly doubled',
+    Math.abs(newPhone.rotatePerEdge / oldPhone.rotatePerEdge - 2) < 1e-9,
+    `ratio ${(newPhone.rotatePerEdge / oldPhone.rotatePerEdge).toFixed(3)}`);
+  check('the phone zoom gain is exactly doubled',
+    Math.abs(newPhone.zoom / oldPhone.zoom - 2) < 1e-9,
+    `ratio ${(newPhone.zoom / oldPhone.zoom).toFixed(3)}`);
+
+  // Rotation: a 200 px swipe across the 390 px phone, measured over the gesture
+  // plus half a second — the window the hand is in.
+  const swipeDeg = (gains) => {
+    const { cam, c } = makeControls();
+    c.gains = { ...gains };
+    const eye0 = cam.position.clone().sub(c.target).normalize();
+    down(1, 95, 400);
+    for (let x = 105; x <= 295; x += 10) { move(1, x, 400); c.update(1 / 60); }
+    up(1);
+    for (let i = 0; i < 30; i++) c.update(1 / 60);
+    return THREE.MathUtils.radToDeg(eye0.angleTo(cam.position.clone().sub(c.target).normalize()));
+  };
+  const oldDeg = swipeDeg(oldPhone);
+  const newDeg = swipeDeg(newPhone);
+  check('the same phone swipe now turns the view about twice as far',
+    newDeg > oldDeg * 1.9, `${oldDeg.toFixed(1)}° before, ${newDeg.toFixed(1)}° now`);
+  console.log(`        (200 px phone swipe: ${oldDeg.toFixed(1)}° before, ${newDeg.toFixed(1)}° now)`);
+
+  // Zoom: a pinch spreading two fingers by 150 px — about all the travel a 390 px
+  // screen has. Measured as the distance ratio, which is what the log-space step
+  // controls.
+  const pinchRatio = (gains) => {
+    const { cam, c } = makeControls();
+    c.gains = { ...gains };
+    c.minDistance = 0.05;
+    c.maxDistance = 60;
+    cam.position.set(0, 0, 4);
+    c.target.set(0, 0, 0);
+    c.update(1 / 60);
+    const d0 = cam.position.distanceTo(c.target);
+    down(1, 120, 400);
+    down(2, 270, 400);
+    for (let s = 0; s <= 75; s += 5) {
+      move(1, 120 - s, 400);
+      move(2, 270 + s, 400);
+      c.update(1 / 60);
+    }
+    up(1); up(2);
+    for (let i = 0; i < 30; i++) c.update(1 / 60);
+    return d0 / cam.position.distanceTo(c.target);
+  };
+  const oldZoom = pinchRatio(oldPhone);
+  const newZoom = pinchRatio(newPhone);
+  // Log space is where the doubling is defined, so that is where it is checked:
+  // twice the log step, i.e. the new ratio is the old one squared.
+  const oldLog = Math.log(oldZoom);
+  const newLog = Math.log(newZoom);
+  check('the same phone pinch now zooms about twice as far (in log space)',
+    newLog > oldLog * 1.8, `×${oldZoom.toFixed(2)} before, ×${newZoom.toFixed(2)} now`);
+  console.log(`        (150 px phone pinch: ×${oldZoom.toFixed(2)} before, ×${newZoom.toFixed(2)} now)`);
+
+  // And the clamps must still be clamps — headroom over the demand, not the thing
+  // setting the speed. A 10 px/frame flick at this gain asks for far less than the
+  // cap; that is what makes the cap a backstop.
+  check('the doubled phone caps still sit above what a fast swipe demands',
+    newPhone.maxAnglePerFrame > (10 / 390) * newPhone.rotatePerEdge,
+    `cap ${newPhone.maxAnglePerFrame} vs demand ${((10 / 390) * newPhone.rotatePerEdge).toFixed(4)}`);
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

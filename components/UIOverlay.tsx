@@ -547,6 +547,14 @@ function ViewSwitcher({
 // hopeless: zoom pulls the camera toward the Sun, not toward whatever you were
 // looking at. This rail is the answer — one tap selects a planet and hands it
 // to the follow camera, which flies there.
+//
+// It WRAPS; it does not scroll sideways. Nine chips need ~430 px and a phone rail
+// is ~280 px, so the old `overflow-x-auto no-scrollbar` row put Uranus and
+// Neptune outside the dock with nothing on screen to say they were there — a
+// horizontal scroll area with no scrollbar, inside a layer that also swallows
+// horizontal drags for the camera. Wrapping is what the action rail below it
+// already does, so on a narrow screen this becomes two visible rows instead of
+// one row with a hidden half.
 // ---------------------------------------------------------------------------
 
 function SolarDock({
@@ -558,18 +566,21 @@ function SolarDock({
   onClearSelection: () => void;
 }) {
   return (
-    <div className="pointer-events-auto">
-      <div className="flex items-center gap-1 px-1.5 py-1.5 rounded-2xl bg-black/60 backdrop-blur-2xl border border-white/10 shadow-2xl overflow-x-auto no-scrollbar">
+    <div className="pointer-events-auto max-w-full">
+      <div className="flex flex-wrap items-center justify-center gap-1 px-1.5 py-1.5 rounded-2xl bg-black/60 backdrop-blur-2xl border border-white/10 shadow-2xl">
         <button
           onClick={onClearSelection}
           title="Back to the whole system"
-          className="flex flex-col items-center gap-1 px-2.5 py-1 rounded-xl shrink-0 chip-btn border border-transparent text-gray-400 hover:text-white hover:bg-white/[0.07]"
+          className="flex flex-col items-center gap-1 px-2 sm:px-2.5 py-1 rounded-xl shrink-0 chip-btn border border-transparent text-gray-400 hover:text-white hover:bg-white/[0.07]"
         >
           <Sun className="w-4 h-4 text-amber-400" />
           <span className="text-[8px] font-mono uppercase tracking-widest">System</span>
         </button>
 
-        <span className="w-px self-stretch bg-white/10 mx-0.5 shrink-0" />
+        {/* Only a separator, and in a wrapping row it can land at the end of a
+            line where it means nothing — so it is spent only where there is room
+            for the whole dock to read as one strip. */}
+        <span className="hidden sm:block w-px self-stretch bg-white/10 mx-0.5 shrink-0" />
 
         {PLANETS.map((planet) => {
           const isOn = selectedBody?.kind === 'planet' && selectedBody.planet.name === planet.name;
@@ -579,7 +590,7 @@ function SolarDock({
               onClick={() => { onSelectBody({ kind: 'planet', planet }); onIsFocusedChange(true); }}
               title={`Fly to ${planet.name}`}
               aria-pressed={isOn}
-              className={`flex flex-col items-center gap-1 px-2.5 py-1 rounded-xl shrink-0 chip-btn border ${
+              className={`flex flex-col items-center gap-1 px-2 sm:px-2.5 py-1 rounded-xl shrink-0 chip-btn border ${
                 isOn
                   ? 'bg-white/10 border-white/25 text-white'
                   : 'border-transparent text-gray-400 hover:text-white hover:bg-white/[0.07]'
@@ -2088,23 +2099,16 @@ export function UIOverlay({
           </div>
 
           {/* Right Side: timePanel and InfoCard vertically stacked.
-              The COLUMN does not scroll — each card scrolls inside itself, so a
-              card that is complete but half below the fold (the same defect as a
-              card with a scrollbar in it) cannot happen.
 
-              Same `grid grid-rows-[46fr_54fr] gap-3` as the left column, and it
-              has to stay identical — including the gap, which is why this is
-              `gap-3` and not the `gap-4` it used to be. That is what makes the
-              time card exactly as tall as the alerts/fleet card facing it and the
-              detail card exactly as tall as the filters/spacecraft card: same
-              container height, same gap, same fractions, so the same two numbers
-              come out. Before this, both columns were content-height stacks and
-              the four cards lined up only by coincidence.
-
-              With nothing selected there is a single child, so it takes row 1 —
-              the 46fr row — and still matches the card opposite it. */}
-          <div className="grid grid-rows-[46fr_54fr] gap-3 w-80 lg:w-96 h-full min-h-0 shrink-0 pointer-events-auto">
-            <div className="bg-black/40 backdrop-blur-md p-3 lg:p-4 rounded-2xl border border-white/5 shadow-2xl glass-panel animate-fade-up min-h-0 overflow-y-auto custom-scrollbar">
+              Row 1 is `auto`: the time card is sized by its CONTENT, so it never
+              scrolls — the whole panel (SIM TIME, warp, time travel) is always
+              visible at once. That is a deliberate trade against the 46fr row it
+              used to have, which made it exactly as tall as the alerts card
+              opposite but gave it an internal scrollbar to pay for it. Row 2
+              takes what is left, so the detail card still cannot fall off the
+              bottom edge. */}
+          <div className="grid grid-rows-[auto_1fr] gap-3 w-80 lg:w-96 h-full min-h-0 shrink-0 pointer-events-auto">
+            <div className="bg-black/40 backdrop-blur-md p-3 lg:p-4 rounded-2xl border border-white/5 shadow-2xl glass-panel animate-fade-up">
               {timePanel}
             </div>
             {hasSelection && (
