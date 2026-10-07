@@ -1,67 +1,112 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=1,12,24,30&height=220&section=header&text=PIMXSATS&fontSize=42&fontAlignY=35&desc=%E2%9A%A1%20Bitcoin%20Satoshi%20Tracker%20%26%20Lightning%20Telemetry&descFontSize=16&descAlignY=62" alt="PIMXSATS Banner" width="100%" />
+<img src="assets/readme/hero.gif" width="1200" alt="PIMX SATS — rotating 3D geometry" />
 
-<a href="https://github.com/MOHAMMADREZAABEDINPOOR/PIMXSATS">
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=20&duration=2800&pause=1000&color=00D2FF&center=true&vCenter=true&width=780&lines=Next.js+15+Bitcoin+Satoshi+(SAT)+Micro-Accounting+Workstation;Real-Time+Mempool.space+Fee+Estimator+%26+Block+Height+Telemetry;Lightning+Network+Invoice+Decoder+%26+LNURL+Pay+Integration;Dynamic+Fiat-to-Satoshi+Denomination+Currency+Calculators;Bilingual+Persian+%26+English+Financial+Interface" alt="Typing SVG" />
-</a>
+**[English](README.md) · [فارسی](README.fa.md)**
 
-<br/>
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge&logo=opensourceinitiative)](https://opensource.org/licenses/MIT)
-[![Next.js 15](https://img.shields.io/badge/Framework-Next.js_15-000000?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Bitcoin](https://img.shields.io/badge/Crypto-Bitcoin_Satoshi-F7931A?style=for-the-badge&logo=bitcoin&logoColor=white)](https://bitcoin.org/)
-[![Read in Persian](https://img.shields.io/badge/مطالعه_به_فارسی-Persian_README-008080?style=for-the-badge)](#-بخش-فوقالعاده-مفصل-و-جامع-به-زبان-فارسی-persian-documentation)
-
-<p align="center">
-  <b>PIMXSATS</b> is a high-precision Bitcoin Satoshi tracking and Lightning Network telemetry workstation engineered with Next.js 15 and TypeScript. Features real-time Mempool.space transaction fee estimations, Satoshi denomination calculators, and Lightning invoice decoding.
-</p>
-
-[Overview](#-overview) •
-[Features](#-key-features) •
-[Quick Start](#-quick-start) •
-[توضیحات فارسی](#-بخش-فوقالعاده-مفصل-و-جامع-به-زبان-فارسی-persian-documentation) •
-[License](#-license)
+<img src="assets/readme/identity.svg" width="1200" alt="space / English and Persian documentation" />
 
 </div>
 
----
+# PIMX SATS
 
-## ⚡ Key Features
+An interactive satellite and solar-system explorer. A Three.js globe, satellite.js orbit propagation and pass predictions turn orbital data into a visual workspace.
 
-- ₿ **Real-Time Satoshi Micro-Accounting**: Convert any fiat currency (USD, EUR, IRR) directly to Sats.
-- ⚡ **Lightning Network Diagnostics**: Decodes BOLT11 invoices, validates payment hashes, and tracks mempool congestion.
-- 📊 **Next.js 15 App Router Architecture**: Server Components and fast server-side hydration.
+[GitHub](https://github.com/MOHAMMADREZAABEDINPOOR/PIMXSATS) · [PIMX / Profile](https://github.com/MOHAMMADREZAABEDINPOOR) · [Static artwork](assets/readme/hero.png)
 
----
+## Features
 
-## 🚀 Quick Start
+- Three-dimensional Earth, satellites and ground tracks
+- Observer location, overhead passes and sky view
+- Favorites, comparisons, orbital history and conjunction panels
+- Solar-system views, space weather and orbital sonification
+
+## Stack
+
+| Tool | Version / source |
+|---|---|
+| React | `^19.2.1` |
+| Next.js | `^15.4.9` |
+| TypeScript | `5.9.3` |
+| Three.js | `^0.185.1` |
+| React Three Fiber | `^9.6.1` |
+| Motion | `^12.23.24` |
+| Tailwind CSS | `4.1.11` |
+
+## Getting started
+
+Node.js 22.12+ and the package manager declared in package.json. Install dependencies from the checked-in lockfile where available.
 
 ```bash
 git clone https://github.com/MOHAMMADREZAABEDINPOOR/PIMXSATS.git
 cd PIMXSATS
 
-npm install
+npm ci
 npm run dev
 ```
 
+## Configuration
+
+These names are found in the example configuration or source; not all are required. Check their defaults/usage in those files and supply secrets only in your local or hosting environment.
+
+| Name | Role |
+|---|---|
+| `APP_URL` | Application setting; inspect its definition |
+| `GEMINI_API_KEY` | Credential/connection setting; keep private |
+
+## Usage
+
+Open the dashboard, choose a satellite and set your observer location. Switch between the globe, sky view and passes panel. Refresh the bundled TLE snapshot with `npm run snapshot`.
+
+## Project structure
+
+| Path | Role |
+|---|---|
+| [`app/`](app/) | Application routes / PHP application |
+| [`assets/`](assets/) | Brand/media/README assets |
+| [`components/`](components/) | Reusable interface components |
+| [`lib/`](lib/) | Shared application modules |
+| [`public/`](public/) | Public web assets |
+| [`scripts/`](scripts/) | Development and maintenance utilities |
+| [`metadata.json`](metadata.json) | Project entry/configuration file |
+| [`package.json`](package.json) | Project entry/configuration file |
+| [`tsconfig.json`](tsconfig.json) | Project entry/configuration file |
+
+## Commands and checks
+
+```bash
+npm run dev
+npm run snapshot
+npm run build
+npm run start
+npm run lint
+npm run check:controls
+```
+
+These commands are declared in package.json; the list is not a test execution report. Test commands may need a browser, service or prepared database.
+
+## Deployment
+
+Deploy the build according to its architecture: server-backed projects need a Node process; static Vite frontends can host dist. Pages functions, KV or D1 require separate configuration.
+
+## Limitations
+
+TLE data ages and orbital predictions are approximate. Network access is needed for fresh data; geolocation is optional. This is an educational explorer, not an operational tracking service.
+
+## Troubleshooting
+
+- Missing packages: install dependencies using the project’s package manager.
+- API/network failure: check the configured origin, provider and hosting bindings.
+- Old assets: rebuild when a build script exists, then clear the browser cache.
+
+## Contributing
+
+Create a focused branch, verify the affected behavior and explain the change clearly. Keep private data, build outputs and local databases out of commits.
+
+## License
+
+No repository-level license file is included in this snapshot. Public visibility alone does not grant reuse rights; contact the repository owner for terms.
+
 ---
 
-## 🇮🇷 بخش فوق‌العاده مفصل و جامع به زبان فارسی (Persian Documentation)
-
-### ۱. معرفی سامانه رهگیری ساتوشی PIMXSATS
-پروژه **PIMXSATS** یک پلتفرم نسل جدید مالی و داشبورد تحلیل داده‌های شبکه بیت‌کوین و لایتنینگ است که با **Next.js 15** و **TypeScript** ساخته شده است. این ابزار به کاربران امکان می‌دهد قیمت لحظه‌ای ساتوشی، کارمزد تراکنش‌ها در مِم‌پول (Mempool)، و فاکتورهای شبکه لایتنینگ را در یک محیط فارسی و انگلیسی رصد کنند.
-
----
-
-## 📜 License
-
-Distributed under the **MIT License**.
-
----
-
-<div align="center">
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=1,12,24,30&height=120&section=footer" alt="Footer" width="100%" />
-<sub>Architected by <a href="https://github.com/MOHAMMADREZAABEDINPOOR"><b>MOHAMMADREZA ABEDINPOOR</b></a>.</sub>
-</div>
+Part of **PIMX** · Documentation in English and Persian.
