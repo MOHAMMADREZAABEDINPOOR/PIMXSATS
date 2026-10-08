@@ -10,6 +10,12 @@
 
 # 🛰️ PIMX SATS
 
+<!-- pimx-live-site:start -->
+## وب‌سایت آنلاین
+
+**[مشاهدهٔ PIMXSATS ↗](https://pimxsats.pages.dev/)**
+<!-- pimx-live-site:end -->
+
 کاوشگر تعاملی ماهواره‌ها و منظومه شمسی؛ کره سه‌بعدی، محاسبه مدار با satellite.js و پیش‌بینی گذر ماهواره‌ها، داده‌های مداری را به یک محیط دیداری تبدیل می‌کنند.
 
 [GitHub](https://github.com/MOHAMMADREZAABEDINPOOR/PIMXSATS) · [PIMX / Profile](https://github.com/MOHAMMADREZAABEDINPOOR) · [بنر ثابت](assets/readme/hero.png)
