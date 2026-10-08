@@ -8,6 +8,12 @@
 
 # 🛰️ PIMX SATS
 
+<!-- pimx-live-site:start -->
+## Live website
+
+**[Open PIMXSATS ↗](https://pimxsats.pages.dev/)**
+<!-- pimx-live-site:end -->
+
 An interactive satellite and solar-system explorer. A Three.js globe, satellite.js orbit propagation and pass predictions turn orbital data into a visual workspace.
 
 [GitHub](https://github.com/MOHAMMADREZAABEDINPOOR/PIMXSATS) · [PIMX / Profile](https://github.com/MOHAMMADREZAABEDINPOOR) · [Static artwork](assets/readme/hero.png)
